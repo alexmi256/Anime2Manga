@@ -1,0 +1,11 @@
+# Development / test dependencies.
+-r requirements.txt
+pytest
+pytest-cov
+# Packaging / publishing (used by `just build` / `just publish*`).
+build
+twine
+# Linting (used by `just lint`).
+ruff
+# Type checking (used by `just typecheck`).
+pyrefly
