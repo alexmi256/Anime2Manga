@@ -47,6 +47,29 @@ def run(cmd: list[str], *, timeout: float | None = None) -> subprocess.Completed
     return proc
 
 
+def run_bytes(cmd: list[str], *, timeout: float | None = None) -> bytes:
+    """Run a command that streams binary stdout (raw PCM) and return those bytes.
+
+    Unlike :func:`run` this must not decode stdout as text, so it is kept
+    separate instead of overloading the text wrapper.
+    """
+    try:
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            timeout=timeout,
+            check=False,
+        )
+    except FileNotFoundError as exc:  # pragma: no cover - require_tools covers this
+        raise FFmpegError(f"Executable not found: {cmd[0]}", cmd) from exc
+    if proc.returncode != 0:
+        stderr = (proc.stderr or proc.stdout or b"").decode("utf-8", "replace")
+        tail = stderr.strip().splitlines()
+        detail = "\n".join(tail[-8:]) if tail else "no output"
+        raise FFmpegError(f"Command failed ({proc.returncode}): {' '.join(cmd)}\n{detail}", cmd)
+    return proc.stdout
+
+
 def ffprobe_json(
     entries: list[str],
     path: Path,

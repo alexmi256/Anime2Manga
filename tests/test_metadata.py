@@ -7,6 +7,7 @@ import pytest
 from anime2manga.errors import Anime2MangaError
 from anime2manga.metadata import (
     classify_chapters,
+    parse_audio_stream,
     parse_timestamp,
     resolve_clip_window,
 )
@@ -93,3 +94,35 @@ def test_resolve_clip_window_rejects_empty(make_media):
     media = make_media(duration=1000.0)
     with pytest.raises(Anime2MangaError):
         resolve_clip_window(media, start_at="20:00", end_at="10:00")
+
+
+def test_parse_audio_stream_returns_none_without_audio():
+    assert parse_audio_stream([{"index": 0, "codec_type": "video"}]) is None
+
+
+def test_parse_audio_stream_prefers_default_track():
+    streams = [
+        {"index": 1, "codec_type": "audio", "codec_name": "aac", "channels": 2,
+         "channel_layout": "stereo", "sample_rate": "48000",
+         "tags": {"language": "jpn"}, "disposition": {"default": 0}},
+        {"index": 2, "codec_type": "audio", "codec_name": "eac3", "channels": 6,
+         "channel_layout": "5.1", "sample_rate": "48000",
+         "tags": {"language": "eng"}, "disposition": {"default": 1}},
+    ]
+    info = parse_audio_stream(streams)
+    assert info is not None
+    assert info.index == 2
+    assert info.channels == 6 and not info.is_mono
+    assert info.language == "eng"
+    assert info.is_default
+
+
+def test_parse_audio_stream_falls_back_to_first_track():
+    streams = [
+        {"index": 3, "codec_type": "audio", "codec_name": "vorbis", "channels": 1,
+         "channel_layout": "mono", "sample_rate": "44100"},
+    ]
+    info = parse_audio_stream(streams)
+    assert info is not None
+    assert info.index == 3
+    assert info.is_mono

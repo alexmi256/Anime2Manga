@@ -42,6 +42,8 @@ def _result(tmp_path) -> PipelineResult:
     scene1.blur_score = 123.4
     scene1.faces = [FaceBox(100, 200, 80, 90, 0.87)]
     scene1.subtitles = [SubtitleLine(1, 101.0, 103.0, "Hello there")]
+    scene1.audio_focus = "left"
+    scene1.audio_balance_db = 8.25
 
     scene2 = Scene(index=2, start=105.0, end=108.0, fps=23.976)
     scene2.is_panoramic = True
@@ -76,6 +78,7 @@ def test_build_markdown_contains_expected_sections(tmp_path):
     assert "- 3: English" in text
     assert "Duration: 00:22:47.533" in text
     assert "# Scene Number 1" in text
+    assert "Audio Direction: Left" in text
     assert "Start Time: 00:01:40.000" in text
     assert "Start Frame: 2398" in text
     assert "![Frame Image](frames/scene_0001.jpg)" in text
@@ -85,6 +88,7 @@ def test_build_markdown_contains_expected_sections(tmp_path):
     assert "- x=100, y=200, width=80, height=90, confidence=0.87" in text
     assert "- Hello there" in text
     assert "# Scene Number 2" in text
+    assert "Audio Direction: Center" in text
     assert "Is Panoramic: Yes" in text
     assert "Pan Direction: right" in text
     assert "Pan Start Time: 00:01:45.500" in text
@@ -117,6 +121,9 @@ def test_scene_to_dict_is_json_serialisable(make_scene):
     assert payload["pan_start"] == 1.25
     assert payload["pan_start_frame"] == 30
     assert payload["pan_end_frame"] == 42
+    assert payload["audio_focus"] == "center"
+    assert payload["audio_direction"] == "Center"
+    assert payload["audio_balance_db"] is None
     assert payload["faces"] == [{"x": 10, "y": 20, "width": 30, "height": 40, "confidence": 0.5}]
 
 

@@ -18,6 +18,7 @@ from .models import (
     BITMAP_SUBTITLE_CODECS,
     CREDITS_KEYWORDS,
     INTRO_KEYWORDS,
+    AudioInfo,
     Chapter,
     ClipWindow,
     MediaInfo,
@@ -48,6 +49,7 @@ def probe_media(path: Path) -> MediaInfo:
     stream_data = ffprobe_json(
         [
             "stream=index,codec_type,codec_name,width,height,r_frame_rate,avg_frame_rate"
+            ",channels,channel_layout,sample_rate"
             ":stream_tags=language,title"
             ":stream_disposition=default",
         ],
@@ -83,6 +85,7 @@ def probe_media(path: Path) -> MediaInfo:
     duration = float(format_data.get("format", {}).get("duration") or 0.0)
     chapters = _parse_chapters(chapter_data.get("chapters", []))
     intro, credits = classify_chapters(chapters, duration)
+    audio = parse_audio_stream(streams)
 
     return MediaInfo(
         path=path,
@@ -94,6 +97,41 @@ def probe_media(path: Path) -> MediaInfo:
         chapters=chapters,
         intro=intro,
         credits=credits,
+        audio=audio,
+    )
+
+
+def parse_audio_stream(streams: list[dict]) -> AudioInfo | None:
+    """Pick the audio stream to analyse and describe it.
+
+    The default-disposition track wins when present, otherwise the first audio
+    stream is used.  Returns ``None`` for a video with no audio at all.
+    """
+    audio_streams = [s for s in streams if s.get("codec_type") == "audio"]
+    if not audio_streams:
+        return None
+    chosen = next(
+        (s for s in audio_streams if (s.get("disposition") or {}).get("default", 0)),
+        audio_streams[0],
+    )
+    tags = chosen.get("tags", {}) or {}
+    try:
+        channels = int(chosen.get("channels") or 0)
+    except (TypeError, ValueError):
+        channels = 0
+    try:
+        sample_rate = int(chosen.get("sample_rate") or 0)
+    except (TypeError, ValueError):
+        sample_rate = 0
+    return AudioInfo(
+        index=int(chosen.get("index", -1)),
+        codec=chosen.get("codec_name", "") or "",
+        channels=channels,
+        channel_layout=chosen.get("channel_layout", "") or "",
+        sample_rate=sample_rate,
+        language=tags.get("language", "") or "",
+        title=tags.get("title", "") or "",
+        is_default=bool((chosen.get("disposition") or {}).get("default", 0)),
     )
 
 

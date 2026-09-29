@@ -120,6 +120,35 @@ class SubtitleTrack:
 
 
 @dataclass(frozen=True)
+class AudioInfo:
+    """The audio stream chosen for left/right focus analysis."""
+
+    index: int
+    codec: str
+    channels: int
+    channel_layout: str
+    sample_rate: int
+    language: str = ""
+    title: str = ""
+    is_default: bool = False
+
+    @property
+    def is_mono(self) -> bool:
+        """True for a genuine single-channel stream.
+
+        An unknown channel count (``0``) is *not* treated as mono, so the decode
+        path still gets a chance to recover a stereo balance.
+        """
+        return self.channels == 1
+
+    @property
+    def label(self) -> str:
+        layout = self.channel_layout or f"{self.channels}ch"
+        name = self.title.strip() or self.language.strip() or "und"
+        return f"#{self.index} {name} - {layout} ({self.codec})"
+
+
+@dataclass(frozen=True)
 class MediaInfo:
     """Everything we probe up front about the input file."""
 
@@ -132,6 +161,8 @@ class MediaInfo:
     chapters: list[Chapter]
     intro: TimeRange | None = None
     credits: TimeRange | None = None
+    #: Audio stream used for direction detection (``None`` when there is no audio).
+    audio: AudioInfo | None = None
 
 
 @dataclass
@@ -208,9 +239,15 @@ class Scene:
     subtitles: list[SubtitleLine] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
 
+    # --- Step 7: left/right audio focus -----------------------------------
+    #: "left" | "center" | "right"; where the scene's audio is panned.
+    audio_focus: str = "center"
+    #: Channel balance in dB: positive favours the left channel, negative the
+    #: right.  ``None`` when the source is mono/silent or has no audio.
+    audio_balance_db: float | None = None
+
     # --- Planned stages (stubs); kept typed so downstream code can rely on
     #     them without a schema migration. -----------------------------------
-    audio_focus: str = "middle"  # step 7: "left" | "middle" | "right"
     faces: list[FaceBox] = field(default_factory=list)  # step 8
     crop: CropOption | None = None  # step 9
     text_placement: TextPlacement | None = None  # step 10

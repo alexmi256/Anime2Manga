@@ -35,4 +35,7 @@ def plan_text_placement(
     budget described in the module docstring.
     """
     _ = (subtitles, faces, panel_size)
-    return TextPlacement(side=scene.audio_focus)
+    # ``audio_focus`` is "left"/"center"/"right"; center carries no side
+    # preference, so it maps to the neutral "auto".
+    side = scene.audio_focus if scene.audio_focus in {"left", "right"} else "auto"
+    return TextPlacement(side=side)

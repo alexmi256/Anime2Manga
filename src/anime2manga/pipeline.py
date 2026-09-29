@@ -11,12 +11,13 @@ Order of operations
 5. Validate that scenes still tile the clip with no gaps/overlaps.
 6. Re-detect text-overloaded scenes at a lower threshold, then choose the
    clearest frame near each scene's subtitle timing (or use the panorama).
-7. (planned) Left/right audio focus - not invoked yet.
+7. Measure the left/right audio balance of each scene so text placement can
+   favour the side the dialogue comes from.
 8. Detect faces on each chosen frame; optionally draw their bounding boxes onto
    the saved image.
 
-Steps 7 and 9-10 (audio focus, cropping, text placement) are stubbed in their
-own modules and are intentionally *not* invoked yet.
+Steps 9-10 (cropping, text placement) are stubbed in their own modules and are
+intentionally *not* invoked yet.
 """
 
 from __future__ import annotations
@@ -25,6 +26,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import audio, faces
+from .audio import AudioFocusConfig
 from .errors import Anime2MangaError
 from .faces import FaceDetectionConfig
 from .ffmpeg_utils import require_tools
@@ -77,6 +79,9 @@ class PipelineConfig:
     pan: PanConfig = field(default_factory=PanConfig)
     #: Scenes this short (seconds) trailing a panorama are folded into it.
     pan_merge_max_len: float = 1.0
+    #: Left/right audio focus for each scene (step 7).
+    detect_audio: bool = True
+    audio: AudioFocusConfig = field(default_factory=AudioFocusConfig)
     #: Draw detected face bounding boxes onto the saved chosen frames.
     draw_face_boxes: bool = True
     face: FaceDetectionConfig = field(default_factory=FaceDetectionConfig)
@@ -121,6 +126,7 @@ class Pipeline:
             self._step4_panoramas()
         self._step5_validate()
         self._step6_frames()
+        self._step7_audio()
         self._step8_faces()
 
         assert self.media is not None and self.clip is not None
@@ -569,12 +575,38 @@ class Pipeline:
             self.debug(f"scene {scene.index}: {len(scene.faces)} face(s) detected")
         self.log(f"faces detected: {detected}")
 
-    # -- future stages (not wired in) -------------------------------------
-    def stub_audio_focus(self) -> None:
-        """Step 7 hook: fill ``Scene.audio_focus`` (see :mod:`anime2manga.audio`)."""
+    def _step7_audio(self) -> None:
+        """Measure each scene's left/right audio balance (see :mod:`anime2manga.audio`)."""
         assert self.media is not None
+        if not self.config.detect_audio:
+            return
+        info = self.media.audio
+        if info is None:
+            self.log("audio direction: no audio stream, all scenes centered")
+            return
+        if info.is_mono:
+            self.log(f"audio direction: mono source ({info.label}), all scenes centered")
+            return
+
+        counts = {"left": 0, "center": 0, "right": 0}
         for scene in self.scenes:
-            scene.audio_focus = audio.detect_audio_focus(self.media, scene)
+            focus = audio.detect_audio_focus(self.media, scene, config=self.config.audio)
+            scene.audio_focus = focus.direction
+            scene.audio_balance_db = focus.balance_db
+            counts[focus.direction] = counts.get(focus.direction, 0) + 1
+            if focus.balance_db is None:
+                self.debug(
+                    f"scene {scene.index}: audio {focus.direction} ({focus.reason})"
+                )
+            else:
+                self.debug(
+                    f"scene {scene.index}: audio {focus.direction} "
+                    f"balance={focus.balance_db:+.1f} dB ({focus.reason})"
+                )
+        self.log(
+            f"audio direction: left={counts['left']} center={counts['center']} "
+            f"right={counts['right']}"
+        )
 
 
 def run_pipeline(config: PipelineConfig) -> PipelineResult:

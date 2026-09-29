@@ -5,10 +5,10 @@ document.  Subtitles are the backbone: every cue in the chosen track is attached
 to a scene, and each scene gets a clear representative frame (or a stitched
 panorama when the camera pans).
 
-This milestone implements **steps 1–6** of the pipeline plus **step 8 (face
-detection)** and emits `output/report.md` plus `output/scenes.json` for review.
-Later stages (audio focus, crop planning, text placement, subtitle translation)
-are documented stubs.
+This milestone implements **steps 1–8** of the pipeline - including **left/right
+audio focus (step 7)** and **face detection (step 8)** - and emits
+`output/report.md` plus `output/scenes.json` for review.  Later stages (crop
+planning, text placement, subtitle translation) are documented stubs.
 
 ## Requirements
 
@@ -47,6 +47,15 @@ scripts/anime2manga.sh input.mkv --subtitle-track 5
 # Face boxes are drawn on the chosen frames by default; turn drawing off (boxes
 # are still detected and listed in the report):
 scripts/anime2manga.sh input.mkv --no-face-boxes
+
+# Skip left/right audio focus detection entirely:
+scripts/anime2manga.sh input.mkv --no-audio-direction
+
+# Make the left/right call more or less sensitive (default: 1.5 dB imbalance):
+scripts/anime2manga.sh input.mkv --audio-balance-db 5
+
+# Narrow or widen the speech band used for the balance comparison:
+scripts/anime2manga.sh input.mkv --audio-band-low 200 --audio-band-high 4000
 ```
 
 Invalid language/track selections fail with a list of the available tracks, and
@@ -62,7 +71,7 @@ a video with no subtitles fails with a clear message.
 | 4. Pan detection and panoramic stitching, cross-scene retiming | `panorama.py` | implemented |
 | 5. Timeline validation (no gaps/overlaps) | `timeline.py` | implemented |
 | 6. Frame sampling and clearest-frame selection | `frames.py` | implemented |
-| 7. Left/right audio focus | `audio.py` | stub |
+| 7. Left/right audio focus | `audio.py` | implemented |
 | 8. Face detection, bounding boxes on chosen frames | `faces.py` | implemented |
 | 9. Face-aware cropping | `cropping.py` | stub |
 | 10. Text/bubble placement | `text_layout.py` | stub |
@@ -105,6 +114,50 @@ a video with no subtitles fails with a clear message.
 * **Overloaded scenes** carrying more than `--max-subtitles-per-scene` cues are
   re-detected at a lower threshold (`--subdivide-factor`) to yield more panels.
 
+## How audio direction is found
+
+Each scene is labelled `Left`, `Center` or `Right` (stored as lower-case
+`audio_focus` in `scenes.json`, with the measured `audio_balance_db`) so step 10
+can place a text bubble on the side the voice is coming from.
+
+The feature is deliberately small and dependency-free: a compact `audio.py`
+module using numpy on top of the ffmpeg the pipeline already requires.
+
+* **No dedicated library.** There is no turnkey "stereo direction" package:
+  `librosa`, `pydub` and `soundfile` can all read channels, but they are heavy
+  new dependencies and their RMS helpers do not answer a left/right question.
+  ffmpeg's `astats` filter does report per-channel RMS (`RMS level dB`) and
+  would work, but parsing its human-readable log is brittle, so we decode raw
+  PCM instead.  The dB-balance metric below is the standard one used for
+  speaker/headphone channel tests ([AudioCheck](https://www.audiocheck.net/audiotests_stereo.php),
+  [dsp.stackexchange.com/questions/27221](https://dsp.stackexchange.com/questions/27221)).
+* **Mono is skipped.** `ffprobe` reports the chosen stream's channel count; a
+  genuine single-channel (mono) source has no left/right pair, so the scene is
+  reported `Center` without decoding anything.  An unknown count (`0`) is still
+  decoded, in case the stream is really stereo.
+* **Any codec is supported.** The span is decoded to raw `f32le` by ffmpeg, so
+  E-AC-3, AAC, Vorbis/OGG, FLAC, Opus, ... all work.  `-ac 2` downmixes 5.1/7.1
+  to stereo with ffmpeg's standard coefficients.  Analysis runs at 16 kHz
+  (`AudioFocusConfig.analysis_sample_rate`) because only the energy balance
+  matters.
+* **Speech band, not full band.** The left/right comparison is made inside the
+  speech band (`--audio-band-low`/`--audio-band-high`, default 300–3400 Hz)
+  rather than over the whole spectrum.  Dialogue lives in that band, while
+  centered music and ambience mostly sit outside it and would otherwise mask a
+  panned voice.  On the bundled `input.mkv` this labels 23 scenes at the default
+  threshold (vs 15 for a full-band comparison), with the strongest reaching
+  ±5.6 dB.
+* **Metric.** For each channel we take the power inside the speech band over the
+  scene and compare in dB:
+  `balance_db = 10*log10(power_left / power_right)`.  Positive favours the left
+  channel, negative the right.  The same band power gates silence: a scene below
+  `--audio-silence-db` (default `-60 dBFS`) is `Center`; otherwise a
+  `|balance_db|` of at least `--audio-balance-db` (default `1.5 dB`) names a
+  side, and anything smaller is `Center`.  No full-band measurement feeds the
+  direction decision.  The default was checked against the
+  `audiocheck.net_L.ogg` / `audiocheck.net_R.ogg` samples, which score far
+  beyond the threshold in the correct direction.
+
 ## How faces are found
 
 Anime faces are stylised (flat cel shading, oversized eyes, exaggerated
@@ -146,7 +199,9 @@ Running the pipeline prints, and logs to `output/scenes.json`:
 * number of scenes identified for the current settings,
 * per-scene pan direction, shift, consistency, response and panorama size,
 * the absolute start/end of each detected pan segment,
-* chosen frame time, sharpness, subtitle count and detected face count.
+* chosen frame time, sharpness, subtitle count and detected face count,
+* per-scene audio direction and channel balance in dB, plus a
+  `left=… center=… right=…` summary.
 
 `--keep-analysis` keeps the sampled analysis frames under `output/work/`.
 
@@ -173,6 +228,8 @@ Duration: 00:22:47.533
 ...
 
 # Scene Number 1
+
+Audio Direction: Left
 Start Time: 00:02:02.740
 End Time: 00:02:05.750
 Start Frame: 2946
@@ -192,6 +249,7 @@ Face Bounding Boxes:
 
 # Scene Number 2
 
+Audio Direction: Center
 Start Time: 00:02:05.750
 End Time: 00:02:09.300
 Start Frame: 3020

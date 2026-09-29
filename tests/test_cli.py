@@ -24,6 +24,11 @@ def test_parser_defaults():
     assert config.pan.diagonal_ratio == 0.35
     assert config.pan_merge_max_len == 1.0
     assert config.draw_face_boxes is True
+    assert config.detect_audio is True
+    assert config.audio.balance_threshold_db == 1.5
+    assert config.audio.silence_floor_db == -60.0
+    assert config.audio.band_low_hz == 300.0
+    assert config.audio.band_high_hz == 3400.0
 
 
 def test_parser_overrides():
@@ -52,6 +57,15 @@ def test_parser_overrides():
             "--pan-merge-max-len",
             "0.5",
             "--no-face-boxes",
+            "--no-audio-direction",
+            "--audio-balance-db",
+            "2.5",
+            "--audio-silence-db",
+            "-70",
+            "--audio-band-low",
+            "200",
+            "--audio-band-high",
+            "4000",
             "--quiet",
         ]
     )
@@ -68,6 +82,11 @@ def test_parser_overrides():
     assert config.pan.diagonal_ratio == 0.5
     assert config.pan_merge_max_len == 0.5
     assert config.draw_face_boxes is False
+    assert config.detect_audio is False
+    assert config.audio.balance_threshold_db == 2.5
+    assert config.audio.silence_floor_db == -70.0
+    assert config.audio.band_low_hz == 200.0
+    assert config.audio.band_high_hz == 4000.0
     assert config.verbose is False
 
 
