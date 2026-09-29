@@ -68,12 +68,22 @@ a video with no subtitles fails with a clear message.
   0–1) or `scdet` (score 0–100).  Tune with `--scene-method` /
   `--scene-threshold`.
 * **Pan detection** samples the scene at 4 fps and runs `cv2.phaseCorrelate`
-  (Hanning window) between consecutive grayscale frames.  A pan is declared only
-  when the cumulative shift, directional consistency and median correlation
-  response all clear their thresholds (`--pan-min-shift`, `--pan-consistency`,
-  `--pan-response`).  If the motion continues into the next scene it peeks ahead
-  (`--pan-peek`) and retimes the boundary before stitching.  Frames are
-  translated onto a canvas and blended; a panoramic panel is never square.
+  (Hanning window) between consecutive grayscale frames.  Pairs whose response
+  is too low to trust (cuts, repeats, motion blur) are treated as breaks, so a
+  cut is never stitched across.  Within each reliable run the strongest
+  *contiguous* motion segment is chosen and a pan is declared only when the
+  cumulative shift, directional consistency and median response over the moving
+  pairs all clear their thresholds (`--pan-min-shift`, `--pan-consistency`,
+  `--pan-response`, `--pan-pair-response`, `--pan-diagonal-ratio`).  Diagonal
+  moves are named `up-left`, `down-right`, …  If the motion continues into the next scene it
+  peeks ahead (`--pan-peek`) and retimes the boundary before stitching.  When a
+  scene holds several shots, the scene is split so only the panning span becomes
+  a panoramic panel; the surrounding shots keep their own frames.
+* **Panoramas** are stitched by translating each frame onto a canvas and
+  blending overlaps; a panoramic panel is never square.  Colour panoramas are
+  written as **PNG with an alpha channel**: transparent pixels are areas no
+  sampled frame covered, ready for a later pass to fill in.  Non-panning frames
+  stay JPEG.
 * **Frame selection** targets the median subtitle midpoint (or the scene
   midpoint) and picks the sharpest candidate within `--selection-window` seconds
   using the variance of the Laplacian.
@@ -87,6 +97,7 @@ Running the pipeline prints, and logs to `output/scenes.json`:
 * subtitle line count (raw and within the clip),
 * number of scenes identified for the current settings,
 * per-scene pan direction, shift, consistency, response and panorama size,
+* the absolute start/end of each detected pan segment,
 * chosen frame time, sharpness and subtitle count.
 
 `--keep-analysis` keeps the sampled analysis frames under `output/work/`.
@@ -126,4 +137,25 @@ Frame Time: 00:02:04.245
 
 ## Text
 - What? Two death's heads again?
+
+# Scene Number 2
+
+Start Time: 00:02:05.750
+End Time: 00:02:09.300
+Start Frame: 3020
+End Frame: 3105
+
+## Chosen Frame
+![Frame Image](panoramas/scene_00302000.png)
+Frame Size: 2400x1080
+Is Panoramic: Yes
+Pan Direction: up-left
+Pan Start Time: 00:02:05.750
+Pan End Time: 00:02:09.000
+Pan Start Frame: 3020
+Pan End Frame: 3094
+Frame Time: 00:02:07.525
+
+## Text
+- (no subtitles)
 ```

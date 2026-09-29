@@ -79,6 +79,11 @@ def _render_scene(scene: Scene, base: Path) -> list[str]:
     lines.append(f"Is Panoramic: {'Yes' if scene.is_panoramic else 'No'}")
     if scene.is_panoramic and scene.pan_direction:
         lines.append(f"Pan Direction: {scene.pan_direction}")
+    if scene.is_panoramic and scene.pan_start is not None and scene.pan_end is not None:
+        lines.append(f"Pan Start Time: {format_time(scene.pan_start)}")
+        lines.append(f"Pan End Time: {format_time(scene.pan_end)}")
+        lines.append(f"Pan Start Frame: {scene.frame_at(scene.pan_start)}")
+        lines.append(f"Pan End Frame: {scene.frame_at(scene.pan_end)}")
     if scene.frame_time is not None:
         lines.append(f"Frame Time: {format_time(scene.frame_time)}")
     lines.append("")
@@ -111,6 +116,14 @@ def scene_to_dict(scene: Scene) -> dict:
         "is_panoramic": scene.is_panoramic,
         "pan_direction": scene.pan_direction,
         "pan_shift": scene.pan_shift,
+        "pan_start": round(scene.pan_start, 3) if scene.pan_start is not None else None,
+        "pan_end": round(scene.pan_end, 3) if scene.pan_end is not None else None,
+        "pan_start_frame": (
+            scene.frame_at(scene.pan_start) if scene.pan_start is not None else None
+        ),
+        "pan_end_frame": (
+            scene.frame_at(scene.pan_end) if scene.pan_end is not None else None
+        ),
         "panorama_size": scene.panorama_size,
         "frame_path": scene.frame_path.as_posix() if scene.frame_path else None,
         "frame_time": round(scene.frame_time, 3) if scene.frame_time is not None else None,

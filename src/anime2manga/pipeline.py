@@ -228,6 +228,12 @@ class Pipeline:
     def _step4_panoramas(self) -> None:
         assert self.media is not None
         cfg = self.config.pan
+        panorama_dir = self.output_dir / "panoramas"
+        if panorama_dir.exists():
+            # Formats and scene indices change between runs, so drop stale files.
+            for stale in panorama_dir.iterdir():
+                if stale.is_file():
+                    stale.unlink()
         sampler = SceneSampler(
             self.media, self.work_dir, analysis_width=self.config.analysis_width
         )
@@ -242,22 +248,76 @@ class Pipeline:
                 scene.start, scene.end, cfg.sample_fps, tag
             )
             result = detect_pan(scene.index, times, frames, config=cfg)
-            if result.detected:
-                self._maybe_extend_for_pan(scene, index, sampler, result)
-                if result.detected:
-                    self._store_panorama(scene, result)
-            if result.detected:
-                self.pan_results[scene.index] = result
-            else:
+            if not result.detected:
                 self.debug(
                     f"scene {scene.index}: shift={result.cumulative_shift[0]:.1f},"
                     f"{result.cumulative_shift[1]:.1f} consistency={result.consistency:.2f}"
                     f" response={result.mean_response:.2f} -> no pan"
                 )
-            index += 1
+                index += 1
+                continue
+
+            # Only a pan touching the scene's end can spill into the next scene.
+            if self._pan_reaches_scene_end(scene, result):
+                self._maybe_extend_for_pan(scene, index, sampler, result)
+            if not result.detected:
+                index += 1
+                continue
+
+            pan_scene = self._isolate_pan(scene, result)
+            if pan_scene is None:  # pragma: no cover - defensive
+                index += 1
+                continue
+            self._store_panorama(pan_scene, result)
+            self.pan_results[pan_scene.index] = result
+            # The non-pan pieces around the segment cannot hide a stronger pan
+            # (we picked the strongest segment), so skip past them.
+            index = self.scenes.index(pan_scene) + 1
         self.log(
             f"panoramic scenes: {sum(1 for s in self.scenes if s.is_panoramic)}"
         )
+
+    def _pan_reaches_scene_end(self, scene: Scene, result: PanResult) -> bool:
+        tolerance = 1.5 / self.config.pan.sample_fps
+        return scene.end - result.end_time <= tolerance
+
+    def _isolate_pan(self, scene: Scene, result: PanResult) -> Scene | None:
+        """Split ``scene`` so only the panning span becomes panoramic.
+
+        Scene detection can merge several shots; a panorama may therefore cover
+        just part of a scene.  The surrounding spans are kept as their own
+        (non-panoramic) scenes so their content still gets a representative
+        frame.  Returns the scene that now owns the panorama.
+        """
+        start = min(max(result.start_time, scene.start), scene.end)
+        end = min(max(result.end_time, scene.start), scene.end)
+        if end - start <= 0:
+            return None
+        min_len = 0.25
+        pieces: list[Scene] = []
+        # Absorb slivers into the pan scene so the timeline stays gapless.  This
+        # can leave a non-panoramic piece shorter than ``scene_min_len`` (or a
+        # pan scene shorter than it); that is deliberate, because dropping the
+        # sliver would open a timeline gap.
+        pan_start = scene.start if start - scene.start <= min_len else start
+        pan_end = scene.end if scene.end - end <= min_len else end
+        if pan_start != scene.start:
+            pieces.append(Scene(index=0, start=scene.start, end=start, fps=scene.fps))
+        pan_scene = Scene(index=scene.index, start=pan_start, end=pan_end, fps=scene.fps)
+        pieces.append(pan_scene)
+        if pan_end != scene.end:
+            pieces.append(Scene(index=0, start=end, end=scene.end, fps=scene.fps))
+        if len(pieces) == 1:
+            return scene
+        position = self.scenes.index(scene)
+        self.scenes[position : position + 1] = pieces
+        reindex(self.scenes)
+        result.scene_index = pan_scene.index
+        self.debug(
+            f"scene {scene.index}: pan covers {start:.3f}-{end:.3f}s, "
+            f"split into {len(pieces)} scenes"
+        )
+        return pan_scene
 
     def _maybe_extend_for_pan(
         self,
@@ -301,6 +361,8 @@ class Pipeline:
         result.offsets = redetected.offsets
         result.sample_times = redetected.sample_times
         result.frames = redetected.frames
+        result.start_time = redetected.start_time
+        result.end_time = redetected.end_time
 
     def _extend(self, scene: Scene, extension: float) -> float:
         from .timeline import extend_scene_for_pan
@@ -309,13 +371,15 @@ class Pipeline:
 
     def _store_panorama(self, scene: Scene, result: PanResult) -> None:
         image = stitch(result)
-        path = self.output_dir / "panoramas" / f"scene_{int(scene.start*1000):08d}.jpg"
+        path = self.output_dir / "panoramas" / f"scene_{int(scene.start*1000):08d}.png"
         save_image(image, path)
         scene.is_panoramic = True
         scene.pan_direction = result.direction
         scene.panorama_path = path
         scene.panorama_size = (image.shape[1], image.shape[0])
         scene.pan_shift = result.cumulative_shift
+        scene.pan_start = result.start_time
+        scene.pan_end = result.end_time
         scene.notes.append(
             f"pan {result.direction}, canvas {image.shape[1]}x{image.shape[0]}"
         )
@@ -323,7 +387,8 @@ class Pipeline:
             f"scene {scene.index}: PAN {result.direction} shift="
             f"({result.cumulative_shift[0]:.1f},{result.cumulative_shift[1]:.1f}) "
             f"consistency={result.consistency:.2f} response={result.mean_response:.2f} "
-            f"panorama={image.shape[1]}x{image.shape[0]}"
+            f"panorama={image.shape[1]}x{image.shape[0]} "
+            f"span={result.start_time:.3f}-{result.end_time:.3f}s"
         )
 
     def _step5_validate(self) -> None:

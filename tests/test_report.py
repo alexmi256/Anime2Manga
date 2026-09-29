@@ -44,7 +44,9 @@ def _result(tmp_path) -> PipelineResult:
     scene2 = Scene(index=2, start=105.0, end=108.0, fps=23.976)
     scene2.is_panoramic = True
     scene2.pan_direction = "right"
-    scene2.frame_path = tmp_path / "panoramas" / "scene_0002.jpg"
+    scene2.pan_start = 105.5
+    scene2.pan_end = 107.25
+    scene2.frame_path = tmp_path / "panoramas" / "scene_0002.png"
     scene2.frame_size = (3840, 1080)
     scene2.panorama_size = (3840, 1080)
     scene2.subtitles = []
@@ -80,16 +82,25 @@ def test_build_markdown_contains_expected_sections(tmp_path):
     assert "# Scene Number 2" in text
     assert "Is Panoramic: Yes" in text
     assert "Pan Direction: right" in text
+    assert "Pan Start Time: 00:01:45.500" in text
+    assert "Pan End Time: 00:01:47.250" in text
+    assert "Pan Start Frame: 2529" in text
+    assert "Pan End Frame: 2571" in text
     assert "- (no subtitles)" in text
 
 
 def test_scene_to_dict_is_json_serialisable(make_scene):
     scene = make_scene(start=1.0, end=2.0)
     scene.pan_shift = (3.5, 0.0)
+    scene.pan_start = 1.25
+    scene.pan_end = 1.75
     payload = scene_to_dict(scene)
     json.dumps(payload)  # must not raise
     assert payload["start"] == 1.0
     assert payload["is_panoramic"] is False
+    assert payload["pan_start"] == 1.25
+    assert payload["pan_start_frame"] == 30
+    assert payload["pan_end_frame"] == 42
 
 
 def test_write_report_and_json(tmp_path):

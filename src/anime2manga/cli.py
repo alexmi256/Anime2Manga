@@ -134,6 +134,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="Minimum median phase-correlation response (default: 0.6).",
     )
     pan.add_argument(
+        "--pan-pair-response",
+        type=float,
+        default=0.2,
+        help="Pairs below this response are treated as cuts/blur breaks (default: 0.2).",
+    )
+    pan.add_argument(
+        "--pan-diagonal-ratio",
+        type=float,
+        default=0.35,
+        help="Cross-axis share needed to name a diagonal direction (default: 0.35).",
+    )
+    pan.add_argument(
         "--pan-peek",
         type=float,
         default=3.0,
@@ -164,6 +176,8 @@ def config_from_args(args: argparse.Namespace) -> PipelineConfig:
         min_response=args.pan_response,
         peek_seconds=args.pan_peek,
         max_canvas_factor=args.pan_max_canvas,
+        min_pair_response=args.pan_pair_response,
+        diagonal_ratio=args.pan_diagonal_ratio,
     )
     return PipelineConfig(
         input_path=args.input,

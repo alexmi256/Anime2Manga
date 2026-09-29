@@ -196,6 +196,9 @@ class Scene:
     panorama_path: Path | None = None
     panorama_size: tuple[int, int] | None = None
     pan_shift: tuple[float, float] | None = None
+    #: Absolute time span of the panning segment (not the whole scene).
+    pan_start: float | None = None
+    pan_end: float | None = None
 
     # --- Step 6: frame selection -----------------------------------------
     frame_path: Path | None = None
@@ -283,6 +286,9 @@ class PanResult:
     offsets: list[tuple[float, float]] = field(default_factory=list)
     sample_times: list[float] = field(default_factory=list)
     frames: list[Any] = field(default_factory=list)  # numpy arrays
+    #: Absolute start/end time of the detected pan segment.
+    start_time: float = 0.0
+    end_time: float = 0.0
 
 
 @dataclass

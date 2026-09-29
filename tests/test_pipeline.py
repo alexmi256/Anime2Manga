@@ -7,8 +7,16 @@ import pytest
 from anime2manga.cropping import plan_crop
 from anime2manga.errors import TranslationNotImplementedError
 from anime2manga.faces import detect_faces
-from anime2manga.models import ClipWindow, FaceBox, SubtitleLine, TimeRange
+from anime2manga.models import (
+    ClipWindow,
+    FaceBox,
+    PanResult,
+    Scene,
+    SubtitleLine,
+    TimeRange,
+)
 from anime2manga.pipeline import Pipeline, PipelineConfig, run_pipeline
+from anime2manga.timeline import coverage, validate_scenes
 from anime2manga.translation import require_translation
 
 
@@ -33,6 +41,54 @@ def test_filter_subtitles_drops_outside_and_excluded():
     kept = Pipeline._filter_subtitles(lines, clip)
     assert [line.text for line in kept] == ["x", "x"]
     assert kept[0].start == 101.0 and kept[1].start == 150.0
+
+
+def test_isolate_pan_keeps_timeline_gapless(tmp_path):
+    config = PipelineConfig(
+        input_path=tmp_path / "input.mkv", output_dir=tmp_path / "out", verbose=False
+    )
+    pipeline = Pipeline(config)
+    scene = Scene(index=1, start=100.0, end=110.0, fps=24.0)
+    pipeline.scenes = [scene]
+    result = PanResult(
+        scene_index=1,
+        detected=True,
+        direction="up-left",
+        cumulative_shift=(-100.0, -300.0),
+        consistency=1.0,
+        mean_response=0.9,
+        start_time=103.1,
+        end_time=109.9,
+    )
+    pan_scene = pipeline._isolate_pan(scene, result)
+    assert pan_scene is not None
+    clip = ClipWindow(start=100.0, end=110.0, source="test")
+    assert validate_scenes(pipeline.scenes, clip) == []
+    assert coverage(pipeline.scenes, clip) == 1.0
+    # The tiny trailing sliver is absorbed rather than dropped.
+    assert pipeline.scenes[-1].end == 110.0
+
+
+def test_isolate_pan_snaps_whole_scene_when_segment_is_whole(tmp_path):
+    config = PipelineConfig(
+        input_path=tmp_path / "input.mkv", output_dir=tmp_path / "out", verbose=False
+    )
+    pipeline = Pipeline(config)
+    scene = Scene(index=1, start=100.0, end=110.0, fps=24.0)
+    pipeline.scenes = [scene]
+    result = PanResult(
+        scene_index=1,
+        detected=True,
+        direction="left",
+        cumulative_shift=(-500.0, 0.0),
+        consistency=1.0,
+        mean_response=0.9,
+        start_time=100.05,
+        end_time=109.95,
+    )
+    pan_scene = pipeline._isolate_pan(scene, result)
+    assert pan_scene is scene
+    assert pipeline.scenes == [scene]
 
 
 def test_run_pipeline_rejects_missing_input(tmp_path):

@@ -20,6 +20,8 @@ def test_parser_defaults():
     assert config.scene_threshold is None
     assert config.detect_pans is True
     assert config.pan.sample_fps == 4.0
+    assert config.pan.min_pair_response == 0.2
+    assert config.pan.diagonal_ratio == 0.35
 
 
 def test_parser_overrides():
@@ -41,6 +43,10 @@ def test_parser_overrides():
             "--no-pan",
             "--pan-min-shift",
             "0.3",
+            "--pan-pair-response",
+            "0.35",
+            "--pan-diagonal-ratio",
+            "0.5",
             "--quiet",
         ]
     )
@@ -53,6 +59,8 @@ def test_parser_overrides():
     assert config.end_at == "20:00"
     assert config.detect_pans is False
     assert config.pan.min_shift_fraction == 0.3
+    assert config.pan.min_pair_response == 0.35
+    assert config.pan.diagonal_ratio == 0.5
     assert config.verbose is False
 
 
