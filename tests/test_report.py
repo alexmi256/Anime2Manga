@@ -74,7 +74,7 @@ def test_build_markdown_contains_expected_sections(tmp_path):
     assert "# Scene Number 1" in text
     assert "Start Time: 00:01:40.000" in text
     assert "Start Frame: 2398" in text
-    assert "Frame Image: frames/scene_0001.jpg" in text
+    assert "![Frame Image](frames/scene_0001.jpg)" in text
     assert "Is Panoramic: No" in text
     assert "- Hello there" in text
     assert "# Scene Number 2" in text

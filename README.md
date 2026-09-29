@@ -119,7 +119,7 @@ Start Frame: 2946
 End Frame: 3020
 
 ## Chosen Frame
-Frame Image: frames/scene_0001.jpg
+![Frame Image](frames/scene_0001.jpg)
 Frame Size: 1920x1080
 Is Panoramic: No
 Frame Time: 00:02:04.245

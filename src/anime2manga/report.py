@@ -69,7 +69,11 @@ def _render_scene(scene: Scene, base: Path) -> list[str]:
     lines.append(f"End Frame: {scene.end_frame}")
     lines.append("")
     lines.append("## Chosen Frame")
-    lines.append(f"Frame Image: {_relative(scene.frame_path, base)}")
+    frame_ref = _relative(scene.frame_path, base)
+    if scene.frame_path is not None:
+        lines.append(f"![Frame Image]({frame_ref})")
+    else:
+        lines.append(f"Frame Image: {frame_ref}")
     size = f"{scene.frame_size[0]}x{scene.frame_size[1]}" if scene.frame_size else "unknown"
     lines.append(f"Frame Size: {size}")
     lines.append(f"Is Panoramic: {'Yes' if scene.is_panoramic else 'No'}")
