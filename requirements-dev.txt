@@ -9,3 +9,6 @@ twine
 ruff
 # Type checking (used by `just typecheck`).
 pyrefly
+# Model tooling (used by scripts/fetch_face_model.py, not at runtime).
+onnx
+onnxsim

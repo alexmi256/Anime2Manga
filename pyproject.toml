@@ -10,6 +10,8 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "numpy>=1.26",
+    # The anime face detector runs through cv2.dnn, which is present in both
+    # OpenCV 4 and 5.
     "opencv-python>=4.9",
 ]
 
@@ -26,6 +28,9 @@ anime2manga = "anime2manga.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+anime2manga = ["data/*.onnx", "data/*.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

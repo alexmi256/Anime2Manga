@@ -6,6 +6,7 @@ import json
 
 from anime2manga.models import (
     ClipWindow,
+    FaceBox,
     MediaInfo,
     PipelineResult,
     Scene,
@@ -39,6 +40,7 @@ def _result(tmp_path) -> PipelineResult:
     scene1.frame_size = (1920, 1080)
     scene1.frame_time = 102.5
     scene1.blur_score = 123.4
+    scene1.faces = [FaceBox(100, 200, 80, 90, 0.87)]
     scene1.subtitles = [SubtitleLine(1, 101.0, 103.0, "Hello there")]
 
     scene2 = Scene(index=2, start=105.0, end=108.0, fps=23.976)
@@ -79,6 +81,8 @@ def test_build_markdown_contains_expected_sections(tmp_path):
     assert "![Frame Image](frames/scene_0001.jpg)" in text
     assert "Is Panoramic: No" in text
     assert "Frame Number: 2458" in text
+    assert "Face Bounding Boxes:" in text
+    assert "- x=100, y=200, width=80, height=90, confidence=0.87" in text
     assert "- Hello there" in text
     assert "# Scene Number 2" in text
     assert "Is Panoramic: Yes" in text
@@ -105,6 +109,7 @@ def test_scene_to_dict_is_json_serialisable(make_scene):
     scene.pan_shift = (3.5, 0.0)
     scene.pan_start = 1.25
     scene.pan_end = 1.75
+    scene.faces = [FaceBox(10, 20, 30, 40, 0.5)]
     payload = scene_to_dict(scene)
     json.dumps(payload)  # must not raise
     assert payload["start"] == 1.0
@@ -112,6 +117,27 @@ def test_scene_to_dict_is_json_serialisable(make_scene):
     assert payload["pan_start"] == 1.25
     assert payload["pan_start_frame"] == 30
     assert payload["pan_end_frame"] == 42
+    assert payload["faces"] == [{"x": 10, "y": 20, "width": 30, "height": 40, "confidence": 0.5}]
+
+
+def test_report_lists_no_faces_when_none_detected(tmp_path):
+    result = _result(tmp_path)
+    result.scenes[0].faces = []
+    text = build_markdown(result)
+    scene_section = text.split("# Scene Number 1", 1)[1].split("# Scene Number 2", 1)[0]
+    assert "Face Bounding Boxes:" in scene_section
+    assert "- (no faces detected)" in scene_section
+
+
+def test_report_distinguishes_no_chosen_frame(tmp_path):
+    result = _result(tmp_path)
+    result.scenes[0].frame_path = None
+    result.scenes[0].faces = []
+    text = build_markdown(result)
+    scene_section = text.split("# Scene Number 1", 1)[1].split("# Scene Number 2", 1)[0]
+    assert "Face Bounding Boxes:" in scene_section
+    assert "- (no chosen frame)" in scene_section
+    assert "- (no faces detected)" not in scene_section
 
 
 def test_write_report_and_json(tmp_path):

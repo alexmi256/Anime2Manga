@@ -237,7 +237,11 @@ class Scene:
 
 @dataclass(frozen=True)
 class FaceBox:
-    """A face bounding box.  Produced by step 8 (not yet implemented)."""
+    """A face bounding box in full-resolution frame pixels (step 8).
+
+    ``confidence`` is the detector's score for the box (``0..1``); it is a
+    relative strength, not a calibrated probability.
+    """
 
     x: int
     y: int

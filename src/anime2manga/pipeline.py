@@ -1,4 +1,4 @@
-"""Pipeline orchestration for steps 1-6.
+"""Pipeline orchestration for steps 1-8.
 
 Order of operations
 -------------------
@@ -11,8 +11,11 @@ Order of operations
 5. Validate that scenes still tile the clip with no gaps/overlaps.
 6. Re-detect text-overloaded scenes at a lower threshold, then choose the
    clearest frame near each scene's subtitle timing (or use the panorama).
+7. (planned) Left/right audio focus - not invoked yet.
+8. Detect faces on each chosen frame; optionally draw their bounding boxes onto
+   the saved image.
 
-Steps 7-10 (audio focus, faces, cropping, text placement) are stubbed in their
+Steps 7 and 9-10 (audio focus, cropping, text placement) are stubbed in their
 own modules and are intentionally *not* invoked yet.
 """
 
@@ -23,6 +26,7 @@ from pathlib import Path
 
 from . import audio, faces
 from .errors import Anime2MangaError
+from .faces import FaceDetectionConfig
 from .ffmpeg_utils import require_tools
 from .frames import SceneSampler, save_frame, save_image, select_frame
 from .metadata import probe_media, resolve_clip_window
@@ -73,6 +77,9 @@ class PipelineConfig:
     pan: PanConfig = field(default_factory=PanConfig)
     #: Scenes this short (seconds) trailing a panorama are folded into it.
     pan_merge_max_len: float = 1.0
+    #: Draw detected face bounding boxes onto the saved chosen frames.
+    draw_face_boxes: bool = True
+    face: FaceDetectionConfig = field(default_factory=FaceDetectionConfig)
     keep_analysis: bool = False
     verbose: bool = True
 
@@ -114,6 +121,7 @@ class Pipeline:
             self._step4_panoramas()
         self._step5_validate()
         self._step6_frames()
+        self._step8_faces()
 
         assert self.media is not None and self.clip is not None
         reindex(self.scenes)
@@ -542,18 +550,31 @@ class Pipeline:
 
             shutil.rmtree(analysis_dir, ignore_errors=True)
 
+    def _step8_faces(self) -> None:
+        """Detect faces on each chosen frame and optionally draw their boxes.
+
+        Detection always runs so the report can list the boxes; the CLI flag
+        only controls whether the boxes are also painted onto the saved image.
+        """
+        detected = 0
+        for scene in self.scenes:
+            if scene.frame_path is None:
+                continue
+            scene.faces = faces.detect_faces(scene.frame_path, config=self.config.face)
+            if not scene.faces:
+                continue
+            detected += len(scene.faces)
+            if self.config.draw_face_boxes:
+                faces.annotate_faces(scene.frame_path, scene.faces)
+            self.debug(f"scene {scene.index}: {len(scene.faces)} face(s) detected")
+        self.log(f"faces detected: {detected}")
+
     # -- future stages (not wired in) -------------------------------------
     def stub_audio_focus(self) -> None:
         """Step 7 hook: fill ``Scene.audio_focus`` (see :mod:`anime2manga.audio`)."""
         assert self.media is not None
         for scene in self.scenes:
             scene.audio_focus = audio.detect_audio_focus(self.media, scene)
-
-    def stub_faces(self) -> None:
-        """Step 8 hook: fill ``Scene.faces`` (see :mod:`anime2manga.faces`)."""
-        for scene in self.scenes:
-            if scene.frame_path is not None:
-                scene.faces = faces.detect_faces(scene.frame_path)
 
 
 def run_pipeline(config: PipelineConfig) -> PipelineResult:

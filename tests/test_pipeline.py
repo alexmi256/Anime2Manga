@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import cv2
+import numpy as np
 import pytest
 
 from anime2manga.cropping import plan_crop
@@ -253,10 +255,78 @@ def test_translation_raises_until_implemented():
         require_translation(source="eng", target="spa")
 
 
-def test_face_and_crop_stubs_are_safe(tmp_path):
+def test_crop_stub_and_missing_face_detection_are_safe(tmp_path):
     assert detect_faces(tmp_path / "frame.jpg") == []
     crop = plan_crop(1920, 1080, [])
     assert (crop.width, crop.height) == (1080, 1080)
     assert crop.x == (1920 - 1080) // 2
     with_face = plan_crop(1920, 1080, [FaceBox(900, 400, 100, 100)])
     assert with_face.keeps_faces is True
+
+
+def _face_pipeline(tmp_path, **overrides) -> Pipeline:
+    config = PipelineConfig(
+        input_path=tmp_path / "input.mkv",
+        output_dir=tmp_path / "out",
+        verbose=False,
+        **overrides,
+    )
+    return Pipeline(config)
+
+
+def test_step8_faces_attaches_boxes_and_annotates(tmp_path, monkeypatch):
+    frame = tmp_path / "frame.png"
+    cv2.imwrite(str(frame), np.zeros((40, 40, 3), np.uint8))
+    scene = Scene(index=1, start=0.0, end=1.0, fps=24.0)
+    scene.frame_path = frame
+    pipeline = _face_pipeline(tmp_path)
+    pipeline.scenes = [scene]
+
+    box = FaceBox(1, 2, 3, 4, 0.5)
+    monkeypatch.setattr("anime2manga.faces.detect_faces", lambda path, config=None: [box])
+    drawn: list[list[FaceBox]] = []
+    monkeypatch.setattr(
+        "anime2manga.faces.annotate_faces",
+        lambda path, boxes, **kwargs: drawn.append(list(boxes)),
+    )
+
+    pipeline._step8_faces()
+
+    assert scene.faces == [box]
+    assert drawn == [[box]]
+
+
+def test_step8_faces_skips_drawing_when_disabled(tmp_path, monkeypatch):
+    frame = tmp_path / "frame.png"
+    cv2.imwrite(str(frame), np.zeros((40, 40, 3), np.uint8))
+    scene = Scene(index=1, start=0.0, end=1.0, fps=24.0)
+    scene.frame_path = frame
+    pipeline = _face_pipeline(tmp_path, draw_face_boxes=False)
+    pipeline.scenes = [scene]
+
+    box = FaceBox(1, 2, 3, 4, 0.5)
+    monkeypatch.setattr("anime2manga.faces.detect_faces", lambda path, config=None: [box])
+
+    def fail(*args, **kwargs):
+        raise AssertionError("annotate_faces should not be called")
+
+    monkeypatch.setattr("anime2manga.faces.annotate_faces", fail)
+
+    pipeline._step8_faces()
+
+    assert scene.faces == [box]
+
+
+def test_step8_faces_skips_scenes_without_frames(tmp_path, monkeypatch):
+    scene = Scene(index=1, start=0.0, end=1.0, fps=24.0)
+    pipeline = _face_pipeline(tmp_path)
+    pipeline.scenes = [scene]
+
+    def fail(*args, **kwargs):
+        raise AssertionError("detect_faces should not be called without a frame")
+
+    monkeypatch.setattr("anime2manga.faces.detect_faces", fail)
+
+    pipeline._step8_faces()
+
+    assert scene.faces == []

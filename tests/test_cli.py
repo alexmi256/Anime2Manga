@@ -23,6 +23,7 @@ def test_parser_defaults():
     assert config.pan.min_pair_response == 0.2
     assert config.pan.diagonal_ratio == 0.35
     assert config.pan_merge_max_len == 1.0
+    assert config.draw_face_boxes is True
 
 
 def test_parser_overrides():
@@ -50,6 +51,7 @@ def test_parser_overrides():
             "0.5",
             "--pan-merge-max-len",
             "0.5",
+            "--no-face-boxes",
             "--quiet",
         ]
     )
@@ -65,6 +67,7 @@ def test_parser_overrides():
     assert config.pan.min_pair_response == 0.35
     assert config.pan.diagonal_ratio == 0.5
     assert config.pan_merge_max_len == 0.5
+    assert config.draw_face_boxes is False
     assert config.verbose is False
 
 

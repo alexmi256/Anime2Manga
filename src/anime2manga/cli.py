@@ -18,8 +18,8 @@ def build_parser() -> argparse.ArgumentParser:
         prog="anime2manga",
         description=(
             "Convert an anime video into a manga/storyboard markdown document. "
-            "Steps 1-6: metadata, subtitles, scene detection, pan stitching and "
-            "frame selection."
+            "Steps 1-8: metadata, subtitles, scene detection, pan stitching, "
+            "frame selection and face detection."
         ),
     )
     parser.add_argument("input", type=Path, help="Input video (usually .mkv).")
@@ -167,6 +167,14 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
 
+    face = parser.add_argument_group("face detection")
+    face.add_argument(
+        "--face-boxes",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Draw bounding boxes around detected faces on chosen frames (default: on).",
+    )
+
     debug = parser.add_argument_group("debug")
     debug.add_argument(
         "--keep-analysis",
@@ -207,6 +215,7 @@ def config_from_args(args: argparse.Namespace) -> PipelineConfig:
         detect_pans=not args.no_pan,
         pan=pan,
         pan_merge_max_len=args.pan_merge_max_len,
+        draw_face_boxes=args.face_boxes,
         keep_analysis=args.keep_analysis,
         verbose=not args.quiet,
     )

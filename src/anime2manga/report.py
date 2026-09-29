@@ -1,4 +1,4 @@
-"""Markdown report generation (the deliverable for steps 1-6).
+"""Markdown report generation (the deliverable for steps 1-8).
 
 The report is the review surface: it shows which subtitle track was used, how the
 video was split into scenes, which frame was chosen for each scene, whether that
@@ -88,6 +88,17 @@ def _render_scene(scene: Scene, base: Path) -> list[str]:
         lines.append(f"Frame Time: {format_time(scene.frame_time)}")
     if scene.frame_time is not None and not scene.is_panoramic:
         lines.append(f"Frame Number: {scene.frame_at(scene.frame_time)}")
+    lines.append("Face Bounding Boxes:")
+    if scene.frame_path is None:
+        lines.append("- (no chosen frame)")
+    elif scene.faces:
+        for face in scene.faces:
+            lines.append(
+                f"- x={face.x}, y={face.y}, width={face.width}, "
+                f"height={face.height}, confidence={face.confidence:.2f}"
+            )
+    else:
+        lines.append("- (no faces detected)")
     lines.append("")
     lines.append("## Text")
     if scene.subtitles:
@@ -136,6 +147,16 @@ def scene_to_dict(scene: Scene) -> dict:
         ),
         "frame_size": scene.frame_size,
         "blur_score": round(scene.blur_score, 3) if scene.blur_score is not None else None,
+        "faces": [
+            {
+                "x": face.x,
+                "y": face.y,
+                "width": face.width,
+                "height": face.height,
+                "confidence": face.confidence,
+            }
+            for face in scene.faces
+        ],
         "subtitle_count": len(scene.subtitles),
         "subtitles": [
             {"start": round(s.start, 3), "end": round(s.end, 3), "text": s.text}

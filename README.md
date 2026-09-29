@@ -5,10 +5,10 @@ document.  Subtitles are the backbone: every cue in the chosen track is attached
 to a scene, and each scene gets a clear representative frame (or a stitched
 panorama when the camera pans).
 
-This first milestone implements **steps 1–6** of the pipeline and emits
-`output/report.md` plus `output/scenes.json` for review.  Later stages (audio
-focus, face detection, crop planning, text placement, subtitle translation) are
-documented stubs.
+This milestone implements **steps 1–6** of the pipeline plus **step 8 (face
+detection)** and emits `output/report.md` plus `output/scenes.json` for review.
+Later stages (audio focus, crop planning, text placement, subtitle translation)
+are documented stubs.
 
 ## Requirements
 
@@ -43,6 +43,10 @@ scripts/anime2manga.sh input.mkv -o output --start-at 02:00 --end-at 20:00
 # Pick a different subtitle language or an explicit track id:
 scripts/anime2manga.sh input.mkv --subtitle-language por
 scripts/anime2manga.sh input.mkv --subtitle-track 5
+
+# Face boxes are drawn on the chosen frames by default; turn drawing off (boxes
+# are still detected and listed in the report):
+scripts/anime2manga.sh input.mkv --no-face-boxes
 ```
 
 Invalid language/track selections fail with a list of the available tracks, and
@@ -59,7 +63,7 @@ a video with no subtitles fails with a clear message.
 | 5. Timeline validation (no gaps/overlaps) | `timeline.py` | implemented |
 | 6. Frame sampling and clearest-frame selection | `frames.py` | implemented |
 | 7. Left/right audio focus | `audio.py` | stub |
-| 8. Face detection | `faces.py` | stub |
+| 8. Face detection, bounding boxes on chosen frames | `faces.py` | implemented |
 | 9. Face-aware cropping | `cropping.py` | stub |
 | 10. Text/bubble placement | `text_layout.py` | stub |
 | — Subtitle translation | `translation.py` | stub |
@@ -101,6 +105,39 @@ a video with no subtitles fails with a clear message.
 * **Overloaded scenes** carrying more than `--max-subtitles-per-scene` cues are
   re-detected at a lower threshold (`--subdivide-factor`) to yield more panels.
 
+## How faces are found
+
+Anime faces are stylised (flat cel shading, oversized eyes, exaggerated
+geometry), so photographic detectors such as the Haar frontal-face cascade or
+YuNet miss many of them.  Face detection uses the
+[DeepGHS anime face detector](https://huggingface.co/deepghs/anime_face_detection)
+(`face_detect_v1.4_n`, MIT): a YOLOv8n single-class model trained on anime
+faces (F1 ≈ 0.94).  It is bundled under `src/anime2manga/data/` and runs through
+`cv2.dnn`, so there is no ML framework or model download.
+
+1. Letterbox the frame to the model's square input (default 960, preserving
+   aspect ratio) at several content scales. A scale of `1.0` sees faces at their
+   normal size, while `0.5` shrinks the frame inside the canvas so very large
+   close-up faces fall back into the model's training scale; a single 960 pass
+   misses them.
+2. Run the network at each scale, decode the `(cx, cy, w, h, score)` rows and
+   keep detections above `score_threshold` (default 0.2, below the model card's
+   F1 optimum because missed faces were the priority).
+3. Non-maximum-suppress overlaps across all scales and return full-resolution
+   frame-pixel boxes.
+
+The model can be overridden with `FaceDetectionConfig.model_path` or the
+`ANIME2MANGA_ANIME_FACE_MODEL` environment variable; `content_scales` and
+`score_threshold` are tunable on `FaceDetectionConfig`.
+
+By default boxes are also drawn onto the saved chosen frame (`--no-face-boxes`
+disables the drawing; the boxes are still detected and listed in the report).
+
+Detection is not perfect: very stylised or masked/non-human faces can still be
+missed, and decorative patterns that resemble a face (e.g. skull ornaments) can
+occasionally produce a false positive.  Raise `score_threshold` to trade recall
+for precision, or adjust `content_scales`.
+
 ## Debug output
 
 Running the pipeline prints, and logs to `output/scenes.json`:
@@ -109,7 +146,7 @@ Running the pipeline prints, and logs to `output/scenes.json`:
 * number of scenes identified for the current settings,
 * per-scene pan direction, shift, consistency, response and panorama size,
 * the absolute start/end of each detected pan segment,
-* chosen frame time, sharpness and subtitle count.
+* chosen frame time, sharpness, subtitle count and detected face count.
 
 `--keep-analysis` keeps the sampled analysis frames under `output/work/`.
 
@@ -147,6 +184,8 @@ Frame Size: 1920x1080
 Is Panoramic: No
 Frame Time: 00:02:04.245
 Frame Number: 2979
+Face Bounding Boxes:
+- x=812, y=356, width=180, height=196, confidence=0.74
 
 ## Text
 - What? Two death's heads again?
@@ -168,6 +207,8 @@ Pan End Time: 00:02:09.000
 Pan Start Frame: 3020
 Pan End Frame: 3094
 Frame Time: 00:02:07.525
+Face Bounding Boxes:
+- (no faces detected)
 
 ## Text
 - (no subtitles)
