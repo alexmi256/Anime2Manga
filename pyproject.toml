@@ -13,6 +13,8 @@ dependencies = [
     # The anime face detector runs through cv2.dnn, which is present in both
     # OpenCV 4 and 5.
     "opencv-python>=4.9",
+    # Biharmonic panorama inpainting (skimage.restoration.inpaint_biharmonic).
+    "scikit-image>=0.24",
 ]
 
 [project.optional-dependencies]

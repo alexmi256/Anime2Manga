@@ -7,7 +7,9 @@ Order of operations
 2. Select, extract and parse the subtitle track; drop cues in excluded ranges.
 3. Detect scenes with ffmpeg (``select`` or ``scdet``).
 4. Detect pans per scene and, when a pan spills over a boundary, retime the
-   affected scenes and stitch a panorama.
+   affected scenes and stitch a panorama.  Diagonal pan canvases leave
+   transparent holes; a pluggable inpainting method fills them and writes a
+   JPEG beside the PNG.
 5. Validate that scenes still tile the clip with no gaps/overlaps.
 6. Re-detect text-overloaded scenes at a lower threshold, then choose the
    clearest frame near each scene's subtitle timing (or use the panorama).
@@ -25,12 +27,15 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import cv2
+
 from . import audio, faces
 from .audio import AudioFocusConfig
 from .errors import Anime2MangaError
 from .faces import FaceDetectionConfig
 from .ffmpeg_utils import require_tools
 from .frames import SceneSampler, save_frame, save_image, select_frame
+from .inpaint import InpaintConfig, create_inpainter, fill_panorama
 from .metadata import probe_media, resolve_clip_window
 from .models import (
     ClipWindow,
@@ -79,6 +84,8 @@ class PipelineConfig:
     pan: PanConfig = field(default_factory=PanConfig)
     #: Scenes this short (seconds) trailing a panorama are folded into it.
     pan_merge_max_len: float = 1.0
+    #: Content-aware infill for transparent panorama holes.
+    inpaint: InpaintConfig = field(default_factory=InpaintConfig)
     #: Left/right audio focus for each scene (step 7).
     detect_audio: bool = True
     audio: AudioFocusConfig = field(default_factory=AudioFocusConfig)
@@ -124,6 +131,7 @@ class Pipeline:
         self._step3_scenes()
         if self.config.detect_pans and self.clip is not None:
             self._step4_panoramas()
+            self._inpaint_panoramas()
         self._step5_validate()
         self._step6_frames()
         self._step7_audio()
@@ -462,6 +470,56 @@ class Pipeline:
             f"panorama={image.shape[1]}x{image.shape[0]} "
             f"span={result.start_time:.3f}-{result.end_time:.3f}s"
         )
+
+    def _inpaint_panoramas(self) -> None:
+        """Fill the transparent holes of each stitched panorama (step 4b).
+
+        The BGRA panorama keeps the raw stitch (holes and all); here we read it
+        back, hand its alpha channel to the configured :class:`InpaintMethod`
+        and write the filled, flattened JPEG alongside the PNG.  The method is a
+        config knob, so swapping in a different algorithm needs no changes here.
+        """
+        cfg = self.config.inpaint
+        if not cfg.enabled:
+            return
+        panoramas = [
+            scene
+            for scene in self.scenes
+            if scene.is_panoramic and scene.panorama_path is not None
+        ]
+        if not panoramas:
+            return
+
+        method = create_inpainter(cfg.method)
+        filled = 0
+        for scene in panoramas:
+            assert scene.panorama_path is not None
+            image = cv2.imread(str(scene.panorama_path), cv2.IMREAD_UNCHANGED)
+            if image is None:  # pragma: no cover - defensive
+                self.log(f"inpaint: could not read {scene.panorama_path}")
+                continue
+            try:
+                outcome = fill_panorama(image, method, max_pixels=cfg.max_pixels)
+            except Anime2MangaError as error:
+                # One unreconstructable panorama must not abort the whole run.
+                self.log(f"inpaint: scene {scene.index} skipped: {error}")
+                continue
+            if not outcome.filled:
+                # A fully covered canvas (e.g. a purely horizontal pan) has no
+                # holes, so there is nothing to fill and a JPEG would be a copy.
+                continue
+            out_path = scene.panorama_path.with_name(
+                f"{scene.panorama_path.stem}_inpainted.jpg"
+            )
+            save_image(outcome.image, out_path, quality=cfg.quality)
+            scene.panorama_inpainted_path = out_path
+            scene.inpaint_method = outcome.method
+            filled += 1
+            self.debug(
+                f"scene {scene.index}: inpainted {outcome.filled_pixels} px "
+                f"({outcome.method}) -> {out_path.name}"
+            )
+        self.log(f"panoramas inpainted: {filled} (method: {method.name})")
 
     def _step5_validate(self) -> None:
         assert self.clip is not None

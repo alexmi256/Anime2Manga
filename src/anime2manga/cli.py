@@ -9,6 +9,7 @@ from pathlib import Path
 from . import __version__
 from .audio import AudioFocusConfig
 from .errors import Anime2MangaError
+from .inpaint import InpaintConfig, available_inpaint_methods
 from .panorama import PanConfig
 from .pipeline import PipelineConfig, run_pipeline
 from .report import write_report, write_scene_json
@@ -19,8 +20,8 @@ def build_parser() -> argparse.ArgumentParser:
         prog="anime2manga",
         description=(
             "Convert an anime video into a manga/storyboard markdown document. "
-            "Steps 1-8: metadata, subtitles, scene detection, pan stitching, "
-            "frame selection, audio direction and face detection."
+            "Steps 1-8: metadata, subtitles, scene detection, pan stitching and "
+            "infill, frame selection, audio direction and face detection."
         ),
     )
     parser.add_argument("input", type=Path, help="Input video (usually .mkv).")
@@ -168,6 +169,38 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
 
+    inpaint = parser.add_argument_group("panorama inpainting")
+    inpaint.add_argument(
+        "--inpaint",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Fill the transparent holes of stitched panoramas and write the "
+            "result as a JPEG next to the PNG (default: on)."
+        ),
+    )
+    inpaint.add_argument(
+        "--inpaint-method",
+        choices=available_inpaint_methods(),
+        default="biharmonic",
+        help="Infill algorithm for panorama holes (default: biharmonic).",
+    )
+    inpaint.add_argument(
+        "--inpaint-quality",
+        type=int,
+        default=92,
+        help="JPEG quality for filled panoramas (default: 92).",
+    )
+    inpaint.add_argument(
+        "--inpaint-max-pixels",
+        type=int,
+        default=500_000,
+        help=(
+            "Downscale a panorama so at most this many masked pixels are solved "
+            "at once (known pixels stay full resolution; 0 disables)."
+        ),
+    )
+
     face = parser.add_argument_group("face detection")
     face.add_argument(
         "--face-boxes",
@@ -247,6 +280,12 @@ def config_from_args(args: argparse.Namespace) -> PipelineConfig:
         detect_pans=not args.no_pan,
         pan=pan,
         pan_merge_max_len=args.pan_merge_max_len,
+        inpaint=InpaintConfig(
+            enabled=args.inpaint,
+            method=args.inpaint_method,
+            quality=args.inpaint_quality,
+            max_pixels=args.inpaint_max_pixels or None,
+        ),
         detect_audio=not args.no_audio_direction,
         audio=AudioFocusConfig(
             balance_threshold_db=args.audio_balance_db,

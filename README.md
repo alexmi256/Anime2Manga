@@ -16,8 +16,10 @@ planning, text placement, subtitle translation) are documented stubs.
 * `ffmpeg` and `ffprobe` on `PATH`
 * Linux/macOS (bash scripts provided)
 
-`tesseract`/ImageMagick are **not** required for this milestone.  Bitmap
-subtitles (PGS/VobSub) are explicitly rejected because they would need OCR.
+Python dependencies (including `scikit-image` for panorama inpainting) are
+installed with `just install`.  `tesseract`/ImageMagick are **not** required for
+this milestone.  Bitmap subtitles (PGS/VobSub) are explicitly rejected because
+they would need OCR.
 
 ## Install
 
@@ -56,6 +58,11 @@ scripts/anime2manga.sh input.mkv --audio-balance-db 5
 
 # Narrow or widen the speech band used for the balance comparison:
 scripts/anime2manga.sh input.mkv --audio-band-low 200 --audio-band-high 4000
+
+# Diagonal panoramas leave transparent holes; these are filled by default and
+# written next to the PNG as JPEGs.  Turn the pass off, or pick a method:
+scripts/anime2manga.sh input.mkv --no-inpaint
+scripts/anime2manga.sh input.mkv --inpaint-method biharmonic --inpaint-quality 90
 ```
 
 Invalid language/track selections fail with a list of the available tracks, and
@@ -68,7 +75,8 @@ a video with no subtitles fails with a clear message.
 | 1. Container metadata, intro/credits chapters, clip window | `metadata.py` | implemented |
 | 2. Subtitle track selection, extraction and parsing (SRT/ASS) | `subtitles.py` | implemented |
 | 3. Scene detection (`select` / `scdet`) | `scene_detect.py` | implemented |
-| 4. Pan detection and panoramic stitching, cross-scene retiming | `panorama.py` | implemented |
+| 4. Pan detection, panoramic stitching, cross-scene retiming | `panorama.py` | implemented |
+| 4b. Content-aware infill of transparent panorama holes | `inpaint.py` | implemented |
 | 5. Timeline validation (no gaps/overlaps) | `timeline.py` | implemented |
 | 6. Frame sampling and clearest-frame selection | `frames.py` | implemented |
 | 7. Left/right audio focus | `audio.py` | implemented |
@@ -100,8 +108,10 @@ a video with no subtitles fails with a clear message.
 * **Panoramas** are stitched by translating each frame onto a canvas and
   blending overlaps; a panoramic panel is never square.  Colour panoramas are
   written as **PNG with an alpha channel**: transparent pixels are areas no
-  sampled frame covered, ready for a later pass to fill in.  Non-panning frames
-  stay JPEG.
+  sampled frame covered, which the inpainting pass then fills.  The raw PNG is
+  kept; the filled result is written beside it as
+  `panoramas/scene_<start_ms>_inpainted.jpg` (`--no-inpaint` skips it).
+  Non-panning frames stay JPEG.
 * **Frame selection** targets the median subtitle midpoint (or the scene
   midpoint) and picks the sharpest candidate within `--selection-window` seconds
   using the variance of the Laplacian.  Sampling is half-open (`[start, end)`),
@@ -113,6 +123,36 @@ a video with no subtitles fails with a clear message.
   near-duplicate panel.
 * **Overloaded scenes** carrying more than `--max-subtitles-per-scene` cues are
   re-detected at a lower threshold (`--subdivide-factor`) to yield more panels.
+
+## How panoramas are infilled
+
+A diagonal pan cannot fill a rectangular canvas: the corners no sampled frame
+reached stay transparent.  Rather than cropping the panorama back to a square,
+the alpha channel is used as a **mask** and a content-aware inpainting method
+reconstructs the missing pixels (step 4b, `inpaint.py`).
+
+* **Mask.** Every pixel with alpha `0` is missing; opaque pixels are the known
+  boundary.  The filled image is flattened to BGR and saved as a JPEG
+  (`<panorama>_inpainted.jpg`) next to the original PNG, so both are available
+  for review.
+* **Method.** The default is `biharmonic`
+  (`skimage.restoration.inpaint_biharmonic`), which earlier research found gave
+  the best result for the compute time.  It solves the biharmonic equation over
+  the masked region, so holes are extended smoothly from the surrounding
+  colours.  On a ~1.8 MP canvas with ~0.45 MP of holes it takes a few seconds.
+* **Bounded cost.** The number of masked pixels, not the canvas size, drives the
+  biharmonic solve, so a hole larger than `--inpaint-max-pixels` (default
+  500000, `0` disables) is solved on a downscaled copy and the synthetic fill is
+  composited back over the full-resolution known pixels.  A malformed method
+  result, a method crash, or an unreconstructable (fully transparent) panorama
+  is reported and that scene is skipped, never aborting the run.
+* **Pluggable by design.** Algorithms subclass `InpaintMethod` and register with
+  `@register_inpaint_method`.  `inpaint.available_inpaint_methods()` feeds the
+  CLI `--inpaint-method` choices automatically, so adding an algorithm is one
+  small class and it is immediately selectable — no pipeline or report changes.
+* **Nothing to do, nothing written.** A purely horizontal pan has full alpha
+  coverage, so no mask exists, no JPEG is produced and the report shows only the
+  original PNG.  `--no-inpaint` disables the pass entirely.
 
 ## How audio direction is found
 
@@ -257,6 +297,7 @@ End Frame: 3105
 
 ## Chosen Frame
 ![Frame Image](panoramas/scene_00302000.png)
+![Inpainted Panorama](panoramas/scene_00302000_inpainted.jpg)
 Frame Size: 2400x1080
 Is Panoramic: Yes
 Pan Direction: up-left
