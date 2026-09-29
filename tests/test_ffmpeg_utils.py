@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import sys
+
 import pytest
 
-from anime2manga.ffmpeg_utils import uniform_sample_times
+from anime2manga.errors import FFmpegError
+from anime2manga.ffmpeg_utils import run_bytes, uniform_sample_times
 
 
 def test_uniform_sample_times_keeps_interior_grid():
@@ -24,3 +27,22 @@ def test_uniform_sample_times_drops_end_boundary_frame():
 def test_uniform_sample_times_handles_empty_and_bad_fps():
     assert uniform_sample_times(0.0, 1.0, 4.0, 0) == []
     assert uniform_sample_times(0.0, 1.0, 0.0, 4) == []
+
+
+def test_run_bytes_returns_binary_stdout():
+    out = run_bytes(
+        [sys.executable, "-c", "import sys; sys.stdout.buffer.write(b'\\x00\\x01\\xff')"]
+    )
+    assert out == b"\x00\x01\xff"
+
+
+def test_run_bytes_raises_on_nonzero_exit():
+    with pytest.raises(FFmpegError) as excinfo:
+        run_bytes(
+            [
+                sys.executable,
+                "-c",
+                "import sys; sys.stderr.write('boom\\n'); sys.exit(3)",
+            ]
+        )
+    assert "boom" in str(excinfo.value)

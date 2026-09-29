@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import dataclasses
+
 import cv2
 import numpy as np
 import pytest
@@ -10,6 +12,7 @@ from anime2manga.cropping import plan_crop
 from anime2manga.errors import TranslationNotImplementedError
 from anime2manga.faces import detect_faces
 from anime2manga.models import (
+    AudioInfo,
     ClipWindow,
     FaceBox,
     PanResult,
@@ -18,6 +21,7 @@ from anime2manga.models import (
     TimeRange,
 )
 from anime2manga.pipeline import Pipeline, PipelineConfig, run_pipeline
+from anime2manga.text_layout import plan_text_placement
 from anime2manga.timeline import coverage, validate_scenes
 from anime2manga.translation import require_translation
 
@@ -264,6 +268,17 @@ def test_crop_stub_and_missing_face_detection_are_safe(tmp_path):
     assert with_face.keeps_faces is True
 
 
+def test_plan_text_placement_maps_center_to_auto(make_scene):
+    scene = make_scene()
+    panel = (100, 100)
+    scene.audio_focus = "left"
+    assert plan_text_placement(scene, [], [], panel).side == "left"
+    scene.audio_focus = "right"
+    assert plan_text_placement(scene, [], [], panel).side == "right"
+    scene.audio_focus = "center"
+    assert plan_text_placement(scene, [], [], panel).side == "auto"
+
+
 def _face_pipeline(tmp_path, **overrides) -> Pipeline:
     config = PipelineConfig(
         input_path=tmp_path / "input.mkv",
@@ -330,3 +345,70 @@ def test_step8_faces_skips_scenes_without_frames(tmp_path, monkeypatch):
     pipeline._step8_faces()
 
     assert scene.faces == []
+
+
+def _audio_media(make_media, channels: int = 2):
+    return dataclasses.replace(
+        make_media(),
+        audio=AudioInfo(
+            index=1,
+            codec="eac3",
+            channels=channels,
+            channel_layout="stereo" if channels == 2 else "mono",
+            sample_rate=48000,
+        ),
+    )
+
+
+def test_step7_audio_attaches_focus_and_balance(
+    tmp_path, make_media, make_scene, monkeypatch
+):
+    from anime2manga.audio import AudioFocus
+
+    pipeline = _face_pipeline(tmp_path)
+    pipeline.media = _audio_media(make_media)
+    pipeline.scenes = [make_scene(index=1), make_scene(index=2, start=10.0, end=20.0)]
+
+    monkeypatch.setattr(
+        "anime2manga.audio.detect_audio_focus",
+        lambda media, scene, config=None: AudioFocus("left", 9.0, "left channel louder"),
+    )
+
+    pipeline._step7_audio()
+
+    assert [scene.audio_focus for scene in pipeline.scenes] == ["left", "left"]
+    assert pipeline.scenes[0].audio_balance_db == 9.0
+
+
+def test_step7_audio_disabled_leaves_scenes_centered(
+    tmp_path, make_media, make_scene, monkeypatch
+):
+    pipeline = _face_pipeline(tmp_path, detect_audio=False)
+    pipeline.media = _audio_media(make_media)
+    pipeline.scenes = [make_scene()]
+
+    def fail(*args, **kwargs):
+        raise AssertionError("audio detection is disabled")
+
+    monkeypatch.setattr("anime2manga.audio.detect_audio_focus", fail)
+
+    pipeline._step7_audio()
+
+    assert pipeline.scenes[0].audio_focus == "center"
+
+
+def test_step7_audio_skips_mono_source(
+    tmp_path, make_media, make_scene, monkeypatch
+):
+    pipeline = _face_pipeline(tmp_path)
+    pipeline.media = _audio_media(make_media, channels=1)
+    pipeline.scenes = [make_scene()]
+
+    def fail(*args, **kwargs):
+        raise AssertionError("mono sources must not be decoded")
+
+    monkeypatch.setattr("anime2manga.audio.detect_audio_focus", fail)
+
+    pipeline._step7_audio()
+
+    assert pipeline.scenes[0].audio_focus == "center"

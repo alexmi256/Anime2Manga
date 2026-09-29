@@ -31,6 +31,15 @@ def _relative(path: Path | None, base: Path) -> str:
         return path.as_posix()
 
 
+#: Human-facing labels for :attr:`Scene.audio_focus`.
+_AUDIO_DIRECTION_LABELS = {"left": "Left", "center": "Center", "right": "Right"}
+
+
+def audio_direction_label(value: str) -> str:
+    """Title-case a stored audio focus for the report (``center`` -> ``Center``)."""
+    return _AUDIO_DIRECTION_LABELS.get(value, value.title())
+
+
 def build_markdown(result: PipelineResult) -> str:
     """Render the whole report as a markdown string."""
     media = result.media
@@ -63,6 +72,7 @@ def _render_scene(scene: Scene, base: Path) -> list[str]:
     lines: list[str] = []
     lines.append(f"# Scene Number {scene.index}")
     lines.append("")
+    lines.append(f"Audio Direction: {audio_direction_label(scene.audio_focus)}")
     lines.append(f"Start Time: {format_time(scene.start)}")
     lines.append(f"End Time: {format_time(scene.end)}")
     lines.append(f"Start Frame: {scene.start_frame}")
@@ -163,6 +173,12 @@ def scene_to_dict(scene: Scene) -> dict:
             for s in scene.subtitles
         ],
         "audio_focus": scene.audio_focus,
+        "audio_direction": audio_direction_label(scene.audio_focus),
+        "audio_balance_db": (
+            round(scene.audio_balance_db, 2)
+            if scene.audio_balance_db is not None
+            else None
+        ),
         "notes": scene.notes,
     }
 

@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 from . import __version__
+from .audio import AudioFocusConfig
 from .errors import Anime2MangaError
 from .panorama import PanConfig
 from .pipeline import PipelineConfig, run_pipeline
@@ -19,7 +20,7 @@ def build_parser() -> argparse.ArgumentParser:
         description=(
             "Convert an anime video into a manga/storyboard markdown document. "
             "Steps 1-8: metadata, subtitles, scene detection, pan stitching, "
-            "frame selection and face detection."
+            "frame selection, audio direction and face detection."
         ),
     )
     parser.add_argument("input", type=Path, help="Input video (usually .mkv).")
@@ -175,6 +176,37 @@ def build_parser() -> argparse.ArgumentParser:
         help="Draw bounding boxes around detected faces on chosen frames (default: on).",
     )
 
+    audio = parser.add_argument_group("audio direction")
+    audio.add_argument(
+        "--no-audio-direction",
+        action="store_true",
+        help="Disable left/right audio focus detection for the scenes.",
+    )
+    audio.add_argument(
+        "--audio-balance-db",
+        type=float,
+        default=1.5,
+        help="Channel imbalance (dB) required to call a side (default: 1.5).",
+    )
+    audio.add_argument(
+        "--audio-silence-db",
+        type=float,
+        default=-60.0,
+        help="Scenes quieter than this in the speech band (dBFS) are centered (default: -60).",
+    )
+    audio.add_argument(
+        "--audio-band-low",
+        type=float,
+        default=300.0,
+        help="Lower edge of the speech band used for the balance (default: 300 Hz).",
+    )
+    audio.add_argument(
+        "--audio-band-high",
+        type=float,
+        default=3400.0,
+        help="Upper edge of the speech band used for the balance (default: 3400 Hz).",
+    )
+
     debug = parser.add_argument_group("debug")
     debug.add_argument(
         "--keep-analysis",
@@ -215,6 +247,13 @@ def config_from_args(args: argparse.Namespace) -> PipelineConfig:
         detect_pans=not args.no_pan,
         pan=pan,
         pan_merge_max_len=args.pan_merge_max_len,
+        detect_audio=not args.no_audio_direction,
+        audio=AudioFocusConfig(
+            balance_threshold_db=args.audio_balance_db,
+            silence_floor_db=args.audio_silence_db,
+            band_low_hz=args.audio_band_low,
+            band_high_hz=args.audio_band_high,
+        ),
         draw_face_boxes=args.face_boxes,
         keep_analysis=args.keep_analysis,
         verbose=not args.quiet,
