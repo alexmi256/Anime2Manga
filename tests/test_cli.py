@@ -23,6 +23,10 @@ def test_parser_defaults():
     assert config.pan.min_pair_response == 0.2
     assert config.pan.diagonal_ratio == 0.35
     assert config.pan_merge_max_len == 1.0
+    assert config.inpaint.enabled is True
+    assert config.inpaint.method == "biharmonic"
+    assert config.inpaint.quality == 92
+    assert config.inpaint.max_pixels == 500_000
     assert config.draw_face_boxes is True
     assert config.detect_audio is True
     assert config.audio.balance_threshold_db == 1.5
@@ -56,6 +60,11 @@ def test_parser_overrides():
             "0.5",
             "--pan-merge-max-len",
             "0.5",
+            "--no-inpaint",
+            "--inpaint-quality",
+            "80",
+            "--inpaint-max-pixels",
+            "200000",
             "--no-face-boxes",
             "--no-audio-direction",
             "--audio-balance-db",
@@ -81,6 +90,9 @@ def test_parser_overrides():
     assert config.pan.min_pair_response == 0.35
     assert config.pan.diagonal_ratio == 0.5
     assert config.pan_merge_max_len == 0.5
+    assert config.inpaint.enabled is False
+    assert config.inpaint.quality == 80
+    assert config.inpaint.max_pixels == 200000
     assert config.draw_face_boxes is False
     assert config.detect_audio is False
     assert config.audio.balance_threshold_db == 2.5

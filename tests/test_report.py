@@ -51,6 +51,8 @@ def _result(tmp_path) -> PipelineResult:
     scene2.pan_start = 105.5
     scene2.pan_end = 107.25
     scene2.frame_path = tmp_path / "panoramas" / "scene_0002.png"
+    scene2.panorama_inpainted_path = tmp_path / "panoramas" / "scene_0002_inpainted.jpg"
+    scene2.inpaint_method = "biharmonic"
     scene2.frame_size = (3840, 1080)
     scene2.panorama_size = (3840, 1080)
     scene2.subtitles = []
@@ -87,6 +89,12 @@ def test_build_markdown_contains_expected_sections(tmp_path):
     assert "Face Bounding Boxes:" in text
     assert "- x=100, y=200, width=80, height=90, confidence=0.87" in text
     assert "- Hello there" in text
+    assert "![Frame Image](panoramas/scene_0002.png)" in text
+    assert "![Inpainted Panorama](panoramas/scene_0002_inpainted.jpg)" in text
+    # The filled panorama must sit directly under the regular panorama image.
+    assert text.index("![Inpainted Panorama]") > text.index(
+        "![Frame Image](panoramas/scene_0002.png)"
+    )
     assert "# Scene Number 2" in text
     assert "Audio Direction: Center" in text
     assert "Is Panoramic: Yes" in text
@@ -124,7 +132,16 @@ def test_scene_to_dict_is_json_serialisable(make_scene):
     assert payload["audio_focus"] == "center"
     assert payload["audio_direction"] == "Center"
     assert payload["audio_balance_db"] is None
+    assert payload["panorama_inpainted_path"] is None
+    assert payload["inpaint_method"] is None
     assert payload["faces"] == [{"x": 10, "y": 20, "width": 30, "height": 40, "confidence": 0.5}]
+
+
+def test_report_hides_inpainted_image_when_absent(tmp_path):
+    result = _result(tmp_path)
+    result.scenes[1].panorama_inpainted_path = None
+    text = build_markdown(result)
+    assert "Inpainted Panorama" not in text
 
 
 def test_report_lists_no_faces_when_none_detected(tmp_path):

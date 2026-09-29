@@ -82,6 +82,9 @@ def _render_scene(scene: Scene, base: Path) -> list[str]:
     frame_ref = _relative(scene.frame_path, base)
     if scene.frame_path is not None:
         lines.append(f"![Frame Image]({frame_ref})")
+        if scene.panorama_inpainted_path is not None:
+            filled_ref = _relative(scene.panorama_inpainted_path, base)
+            lines.append(f"![Inpainted Panorama]({filled_ref})")
     else:
         lines.append(f"Frame Image: {frame_ref}")
     size = f"{scene.frame_size[0]}x{scene.frame_size[1]}" if scene.frame_size else "unknown"
@@ -148,6 +151,12 @@ def scene_to_dict(scene: Scene) -> dict:
             scene.frame_at(scene.pan_end) if scene.pan_end is not None else None
         ),
         "panorama_size": scene.panorama_size,
+        "panorama_inpainted_path": (
+            scene.panorama_inpainted_path.as_posix()
+            if scene.panorama_inpainted_path
+            else None
+        ),
+        "inpaint_method": scene.inpaint_method,
         "frame_path": scene.frame_path.as_posix() if scene.frame_path else None,
         "frame_time": round(scene.frame_time, 3) if scene.frame_time is not None else None,
         "frame_number": (

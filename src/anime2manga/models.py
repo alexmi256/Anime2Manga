@@ -225,6 +225,11 @@ class Scene:
     is_panoramic: bool = False
     pan_direction: str | None = None
     panorama_path: Path | None = None
+    #: JPEG with the transparent panorama holes filled in (``None`` when the
+    #: panorama was fully covered or inpainting is disabled).
+    panorama_inpainted_path: Path | None = None
+    #: Name of the infill method used for :attr:`panorama_inpainted_path`.
+    inpaint_method: str | None = None
     panorama_size: tuple[int, int] | None = None
     pan_shift: tuple[float, float] | None = None
     #: Absolute time span of the panning segment (not the whole scene).

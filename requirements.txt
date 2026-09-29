@@ -1,3 +1,5 @@
 # Runtime dependencies for Anime2Manga.
 numpy>=1.26
 opencv-python>=4.9
+# Biharmonic panorama inpainting (skimage.restoration.inpaint_biharmonic).
+scikit-image>=0.24
