@@ -157,6 +157,15 @@ def build_parser() -> argparse.ArgumentParser:
         default=4.0,
         help="Reject pans whose canvas exceeds this multiple of a frame dimension.",
     )
+    pan.add_argument(
+        "--pan-merge-max-len",
+        type=float,
+        default=1.0,
+        help=(
+            "Fold a scene this short (seconds) that trails a panorama into the "
+            "panorama (default: 1.0; 0 disables)."
+        ),
+    )
 
     debug = parser.add_argument_group("debug")
     debug.add_argument(
@@ -197,6 +206,7 @@ def config_from_args(args: argparse.Namespace) -> PipelineConfig:
         analysis_fps=args.analysis_fps,
         detect_pans=not args.no_pan,
         pan=pan,
+        pan_merge_max_len=args.pan_merge_max_len,
         keep_analysis=args.keep_analysis,
         verbose=not args.quiet,
     )

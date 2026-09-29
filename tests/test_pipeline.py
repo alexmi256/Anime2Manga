@@ -69,6 +69,59 @@ def test_isolate_pan_keeps_timeline_gapless(tmp_path):
     assert pipeline.scenes[-1].end == 110.0
 
 
+def test_isolate_pan_reserves_last_sampled_frame(tmp_path):
+    config = PipelineConfig(
+        input_path=tmp_path / "input.mkv", output_dir=tmp_path / "out", verbose=False
+    )
+    pipeline = Pipeline(config)
+    scene = Scene(index=1, start=100.0, end=110.0, fps=24.0)
+    pipeline.scenes = [scene]
+    result = PanResult(
+        scene_index=1,
+        detected=True,
+        direction="right",
+        cumulative_shift=(500.0, 0.0),
+        consistency=1.0,
+        mean_response=0.9,
+        start_time=100.0,
+        end_time=104.0,
+    )
+    pan_scene = pipeline._isolate_pan(scene, result)
+    assert pan_scene is not None
+    # The pan owns the frame sampled at 104.0, so the next span starts a sample
+    # later instead of reusing that boundary frame.
+    assert pan_scene.start == 100.0
+    assert pan_scene.end == pytest.approx(104.25)
+    assert pipeline.scenes[-1].start == pytest.approx(104.25)
+    clip = ClipWindow(start=100.0, end=110.0, source="test")
+    assert validate_scenes(pipeline.scenes, clip) == []
+
+
+def test_isolate_pan_absorbs_tail_that_starts_on_last_frame(tmp_path):
+    config = PipelineConfig(
+        input_path=tmp_path / "input.mkv", output_dir=tmp_path / "out", verbose=False
+    )
+    pipeline = Pipeline(config)
+    scene = Scene(index=1, start=100.0, end=104.1, fps=24.0)
+    pipeline.scenes = [scene]
+    result = PanResult(
+        scene_index=1,
+        detected=True,
+        direction="up-left",
+        cumulative_shift=(-100.0, -300.0),
+        consistency=1.0,
+        mean_response=0.9,
+        start_time=100.0,
+        end_time=104.0,
+    )
+    pan_scene = pipeline._isolate_pan(scene, result)
+    assert pan_scene is not None
+    # The trailing 0.1s would have repeated the panorama's boundary frame, so it
+    # is folded into the pan and no separate scene survives.
+    assert len(pipeline.scenes) == 1
+    assert pan_scene.end == pytest.approx(104.1)
+
+
 def test_isolate_pan_snaps_whole_scene_when_segment_is_whole(tmp_path):
     config = PipelineConfig(
         input_path=tmp_path / "input.mkv", output_dir=tmp_path / "out", verbose=False
@@ -89,6 +142,102 @@ def test_isolate_pan_snaps_whole_scene_when_segment_is_whole(tmp_path):
     pan_scene = pipeline._isolate_pan(scene, result)
     assert pan_scene is scene
     assert pipeline.scenes == [scene]
+
+
+def test_merge_pan_slivers_absorbs_short_scene_after_panorama(tmp_path):
+    config = PipelineConfig(
+        input_path=tmp_path / "input.mkv",
+        output_dir=tmp_path / "out",
+        pan_merge_max_len=1.0,
+        verbose=False,
+    )
+    pipeline = Pipeline(config)
+    pan = Scene(index=1, start=100.0, end=104.0, fps=24.0)
+    pan.is_panoramic = True
+    sliver = Scene(index=2, start=104.0, end=104.277, fps=24.0)
+    following = Scene(index=3, start=104.277, end=110.0, fps=24.0)
+    pipeline.scenes = [pan, sliver, following]
+
+    pipeline._merge_pan_slivers()
+
+    assert len(pipeline.scenes) == 2
+    assert pipeline.scenes[0] is pan
+    assert pan.end == 104.277
+    assert [scene.index for scene in pipeline.scenes] == [1, 2]
+    assert any("absorbed" in note for note in pan.notes)
+    clip = ClipWindow(start=100.0, end=110.0, source="test")
+    assert validate_scenes(pipeline.scenes, clip) == []
+
+
+def test_merge_pan_slivers_ignores_long_scene_and_non_panorama(tmp_path):
+    config = PipelineConfig(
+        input_path=tmp_path / "input.mkv",
+        output_dir=tmp_path / "out",
+        pan_merge_max_len=1.0,
+        verbose=False,
+    )
+    pipeline = Pipeline(config)
+    pan = Scene(index=1, start=0.0, end=4.0, fps=24.0)
+    pan.is_panoramic = True
+    long_scene = Scene(index=2, start=4.0, end=6.0, fps=24.0)
+    plain = Scene(index=3, start=6.0, end=10.0, fps=24.0)
+    plain_sliver = Scene(index=4, start=10.0, end=10.5, fps=24.0)
+    pipeline.scenes = [pan, long_scene, plain, plain_sliver]
+
+    pipeline._merge_pan_slivers()
+
+    assert len(pipeline.scenes) == 4
+    assert pipeline.scenes[1] is long_scene
+    assert pipeline.scenes[3] is plain_sliver
+
+
+def test_merge_pan_slivers_rekeys_pan_results(tmp_path):
+    config = PipelineConfig(
+        input_path=tmp_path / "input.mkv",
+        output_dir=tmp_path / "out",
+        pan_merge_max_len=1.0,
+        verbose=False,
+    )
+    pipeline = Pipeline(config)
+    pan1 = Scene(index=1, start=0.0, end=4.0, fps=24.0)
+    pan1.is_panoramic = True
+    sliver = Scene(index=2, start=4.0, end=4.277, fps=24.0)
+    pan2 = Scene(index=3, start=4.277, end=8.0, fps=24.0)
+    pan2.is_panoramic = True
+    pipeline.scenes = [pan1, sliver, pan2]
+    first = PanResult(1, True, "right", (1.0, 0.0), 1.0, 0.9)
+    second = PanResult(3, True, "left", (-1.0, 0.0), 1.0, 0.9)
+    pipeline.pan_results = {1: first, 3: second}
+
+    pipeline._merge_pan_slivers()
+
+    # Removing the sliver renumbers pan2 from 3 to 2; the mapping must follow.
+    assert [scene.index for scene in pipeline.scenes] == [1, 2]
+    assert pipeline.pan_results[1] is first
+    assert pipeline.pan_results[2] is second
+    assert first.scene_index == 1
+    assert second.scene_index == 2
+    assert sorted(pipeline.pan_results) == [
+        scene.index for scene in pipeline.scenes if scene.is_panoramic
+    ]
+
+
+def test_merge_pan_slivers_disabled_when_zero(tmp_path):
+    config = PipelineConfig(
+        input_path=tmp_path / "input.mkv",
+        output_dir=tmp_path / "out",
+        pan_merge_max_len=0.0,
+        verbose=False,
+    )
+    pipeline = Pipeline(config)
+    pan = Scene(index=1, start=0.0, end=4.0, fps=24.0)
+    pan.is_panoramic = True
+    sliver = Scene(index=2, start=4.0, end=4.277, fps=24.0)
+    pipeline.scenes = [pan, sliver]
+
+    pipeline._merge_pan_slivers()
+
+    assert pipeline.scenes == [pan, sliver]
 
 
 def test_run_pipeline_rejects_missing_input(tmp_path):

@@ -22,6 +22,7 @@ def test_parser_defaults():
     assert config.pan.sample_fps == 4.0
     assert config.pan.min_pair_response == 0.2
     assert config.pan.diagonal_ratio == 0.35
+    assert config.pan_merge_max_len == 1.0
 
 
 def test_parser_overrides():
@@ -47,6 +48,8 @@ def test_parser_overrides():
             "0.35",
             "--pan-diagonal-ratio",
             "0.5",
+            "--pan-merge-max-len",
+            "0.5",
             "--quiet",
         ]
     )
@@ -61,6 +64,7 @@ def test_parser_overrides():
     assert config.pan.min_shift_fraction == 0.3
     assert config.pan.min_pair_response == 0.35
     assert config.pan.diagonal_ratio == 0.5
+    assert config.pan_merge_max_len == 0.5
     assert config.verbose is False
 
 

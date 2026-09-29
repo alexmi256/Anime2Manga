@@ -125,6 +125,20 @@ class SampledFrame:
     path: Path
 
 
+def uniform_sample_times(start: float, end: float, fps: float, count: int) -> list[float]:
+    """Return the ``[start, end)`` subset of a uniform ``fps`` sample grid.
+
+    The first ``count`` grid points are ``start + i / fps``.  ffmpeg's ``fps``
+    filter can emit one extra frame sitting exactly on ``end``; that frame
+    belongs to the *next* scene, so it is dropped here.  Keeping the range
+    half-open avoids stitching the boundary frame into a panorama and reusing it
+    as the following scene's representative frame.
+    """
+    if fps <= 0:
+        return []
+    return [t for i in range(count) if (t := start + i / fps) < end]
+
+
 def extract_frames_at_fps(
     path: Path,
     start: float,
@@ -139,8 +153,10 @@ def extract_frames_at_fps(
 
     Times are assigned as ``start + i / fps`` which matches the ``fps`` filter's
     constant-rate output closely enough for ranking frames by sharpness and for
-    phase-correlation strides.  The single *chosen* frame is always re-extracted
-    at its exact timestamp before being written to the report.
+    phase-correlation strides.  Grid points on or past ``end`` are dropped so the
+    range stays half-open (the boundary frame belongs to the next scene).  The
+    single *chosen* frame is always re-extracted at its exact timestamp before
+    being written to the report.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     for stale in out_dir.glob("*.jpg"):
@@ -158,4 +174,5 @@ def extract_frames_at_fps(
     cmd += ["-vf", vf, "-q:v", str(quality), "-fps_mode", "cfr", str(out_dir / "%06d.jpg")]
     run(cmd)
     frames = sorted(out_dir.glob("*.jpg"))
-    return [SampledFrame(start + i / fps, p) for i, p in enumerate(frames)]
+    times = uniform_sample_times(start, end, fps, len(frames))
+    return [SampledFrame(time, p) for time, p in zip(times, frames, strict=False)]

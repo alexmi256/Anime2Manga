@@ -78,6 +78,7 @@ def test_build_markdown_contains_expected_sections(tmp_path):
     assert "Start Frame: 2398" in text
     assert "![Frame Image](frames/scene_0001.jpg)" in text
     assert "Is Panoramic: No" in text
+    assert "Frame Number: 2458" in text
     assert "- Hello there" in text
     assert "# Scene Number 2" in text
     assert "Is Panoramic: Yes" in text
@@ -87,6 +88,16 @@ def test_build_markdown_contains_expected_sections(tmp_path):
     assert "Pan Start Frame: 2529" in text
     assert "Pan End Frame: 2571" in text
     assert "- (no subtitles)" in text
+
+
+def test_frame_number_is_only_reported_for_regular_frames(tmp_path):
+    result = _result(tmp_path)
+    panorama = result.scenes[1]
+    panorama.frame_time = 106.0
+    text = build_markdown(result)
+    panorama_section = text.split("# Scene Number 2", 1)[1]
+    assert "Frame Number:" not in panorama_section
+    assert "Frame Number: 2458" in text
 
 
 def test_scene_to_dict_is_json_serialisable(make_scene):

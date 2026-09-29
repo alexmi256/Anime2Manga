@@ -2,6 +2,7 @@ venv := ".venv"
 python := venv / "bin/python"
 ruff := venv / "bin/ruff"
 pyrefly := venv / "bin/pyrefly"
+output_dir := "output"
 
 default:
     @just --list
@@ -38,7 +39,11 @@ check: lint typecheck test
 
 # Convert the bundled sample input (input.mkv) into output/report.md.
 run:
-    PYTHONPATH=src {{python}} -m anime2manga input.mkv -o output
+    PYTHONPATH=src {{python}} -m anime2manga input.mkv -o {{output_dir}}
+
+# Remove generated output so a fresh `just run` leaves no stale files behind.
+clean:
+    rm -rf {{output_dir}}
 
 # Build source and wheel distributions.
 build:

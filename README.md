@@ -31,6 +31,9 @@ just install          # or: python3 -m venv .venv && .venv/bin/pip install -r re
 # Convert the bundled sample; writes output/report.md
 just run
 
+# Clear generated output so the next `just run` leaves no stale files behind
+just clean
+
 # Or with the bash wrapper:
 scripts/anime2manga.sh input.mkv -o output
 
@@ -78,7 +81,9 @@ a video with no subtitles fails with a clear message.
   moves are named `up-left`, `down-right`, …  If the motion continues into the next scene it
   peeks ahead (`--pan-peek`) and retimes the boundary before stitching.  When a
   scene holds several shots, the scene is split so only the panning span becomes
-  a panoramic panel; the surrounding shots keep their own frames.
+  a panoramic panel; the surrounding shots keep their own frames.  The pan keeps
+  its last sampled frame, so the next span starts one sample later instead of
+  repeating the panorama's edge.
 * **Panoramas** are stitched by translating each frame onto a canvas and
   blending overlaps; a panoramic panel is never square.  Colour panoramas are
   written as **PNG with an alpha channel**: transparent pixels are areas no
@@ -86,7 +91,13 @@ a video with no subtitles fails with a clear message.
   stay JPEG.
 * **Frame selection** targets the median subtitle midpoint (or the scene
   midpoint) and picks the sharpest candidate within `--selection-window` seconds
-  using the variance of the Laplacian.
+  using the variance of the Laplacian.  Sampling is half-open (`[start, end)`),
+  so a frame sitting exactly on a scene boundary belongs to the next scene and
+  is never stitched into the preceding panorama or reused as its own panel.
+* **Post-panorama slivers**: a scene this short (default `--pan-merge-max-len
+  1.0`, `0` disables) right after a panorama is folded into the panorama.  It
+  usually shows the tail of the same shot, so on its own it would appear as a
+  near-duplicate panel.
 * **Overloaded scenes** carrying more than `--max-subtitles-per-scene` cues are
   re-detected at a lower threshold (`--subdivide-factor`) to yield more panels.
 
@@ -109,6 +120,7 @@ just lint        # ruff
 just typecheck   # pyrefly
 just test        # pytest
 just check       # all of the above
+just clean       # remove output/
 ```
 
 ## Report format
@@ -134,6 +146,7 @@ End Frame: 3020
 Frame Size: 1920x1080
 Is Panoramic: No
 Frame Time: 00:02:04.245
+Frame Number: 2979
 
 ## Text
 - What? Two death's heads again?

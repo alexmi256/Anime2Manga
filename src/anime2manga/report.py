@@ -86,6 +86,8 @@ def _render_scene(scene: Scene, base: Path) -> list[str]:
         lines.append(f"Pan End Frame: {scene.frame_at(scene.pan_end)}")
     if scene.frame_time is not None:
         lines.append(f"Frame Time: {format_time(scene.frame_time)}")
+    if scene.frame_time is not None and not scene.is_panoramic:
+        lines.append(f"Frame Number: {scene.frame_at(scene.frame_time)}")
     lines.append("")
     lines.append("## Text")
     if scene.subtitles:
@@ -127,6 +129,11 @@ def scene_to_dict(scene: Scene) -> dict:
         "panorama_size": scene.panorama_size,
         "frame_path": scene.frame_path.as_posix() if scene.frame_path else None,
         "frame_time": round(scene.frame_time, 3) if scene.frame_time is not None else None,
+        "frame_number": (
+            scene.frame_at(scene.frame_time)
+            if scene.frame_time is not None and not scene.is_panoramic
+            else None
+        ),
         "frame_size": scene.frame_size,
         "blur_score": round(scene.blur_score, 3) if scene.blur_score is not None else None,
         "subtitle_count": len(scene.subtitles),

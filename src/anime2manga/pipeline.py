@@ -71,6 +71,8 @@ class PipelineConfig:
     analysis_fps: float = 4.0
     detect_pans: bool = True
     pan: PanConfig = field(default_factory=PanConfig)
+    #: Scenes this short (seconds) trailing a panorama are folded into it.
+    pan_merge_max_len: float = 1.0
     keep_analysis: bool = False
     verbose: bool = True
 
@@ -273,9 +275,59 @@ class Pipeline:
             # The non-pan pieces around the segment cannot hide a stronger pan
             # (we picked the strongest segment), so skip past them.
             index = self.scenes.index(pan_scene) + 1
+        self._merge_pan_slivers()
         self.log(
             f"panoramic scenes: {sum(1 for s in self.scenes if s.is_panoramic)}"
         )
+
+    def _merge_pan_slivers(self) -> None:
+        """Fold a very short scene that trails a panorama into that panorama.
+
+        The scene right after a pan usually shows the tail of the same shot, so
+        on its own it becomes a near-duplicate panel beside the panorama.
+        Absorbing slivers keeps the report readable; the panoramic scene simply
+        grows to cover them and the timeline stays gapless.
+        """
+        limit = self.config.pan_merge_max_len
+        if limit <= 0:
+            return
+        merged: list[Scene] = []
+        absorbed = 0
+        for scene in self.scenes:
+            previous = merged[-1] if merged else None
+            if (
+                previous is not None
+                and previous.is_panoramic
+                and not scene.is_panoramic
+                and scene.duration <= limit
+            ):
+                previous.end = scene.end
+                previous.notes.append(
+                    f"absorbed trailing scene {scene.index} ({scene.duration:.3f}s)"
+                )
+                absorbed += 1
+                continue
+            merged.append(scene)
+        # Absorbing a sliver can renumber panoramas that come after it, so carry
+        # the scene -> PanResult association across reindexing by object identity.
+        results_by_scene = {
+            id(scene): self.pan_results[scene.index]
+            for scene in self.scenes
+            if scene.index in self.pan_results
+        }
+        self.scenes = merged
+        reindex(self.scenes)
+        self.pan_results = {}
+        for scene in self.scenes:
+            result = results_by_scene.get(id(scene))
+            if result is not None:
+                self.pan_results[scene.index] = result
+                result.scene_index = scene.index
+        if absorbed:
+            self.log(
+                f"short scenes merged into preceding panorama: {absorbed} "
+                f"(<= {limit:.2f}s)"
+            )
 
     def _pan_reaches_scene_end(self, scene: Scene, result: PanResult) -> bool:
         tolerance = 1.5 / self.config.pan.sample_fps
@@ -294,19 +346,25 @@ class Pipeline:
         if end - start <= 0:
             return None
         min_len = 0.25
+        # ``end`` is the timestamp of the pan's last sampled frame.  End the pan
+        # one sample later so that frame stays owned by the pan; otherwise the
+        # following span would start on the very same frame and repeat the
+        # panorama's edge as its own representative frame.
+        step = 1.0 / self.config.pan.sample_fps if self.config.pan.sample_fps > 0 else 0.0
+        resume = min(end + step, scene.end)
         pieces: list[Scene] = []
         # Absorb slivers into the pan scene so the timeline stays gapless.  This
         # can leave a non-panoramic piece shorter than ``scene_min_len`` (or a
         # pan scene shorter than it); that is deliberate, because dropping the
         # sliver would open a timeline gap.
         pan_start = scene.start if start - scene.start <= min_len else start
-        pan_end = scene.end if scene.end - end <= min_len else end
+        pan_end = scene.end if scene.end - resume <= min_len else resume
         if pan_start != scene.start:
             pieces.append(Scene(index=0, start=scene.start, end=start, fps=scene.fps))
         pan_scene = Scene(index=scene.index, start=pan_start, end=pan_end, fps=scene.fps)
         pieces.append(pan_scene)
         if pan_end != scene.end:
-            pieces.append(Scene(index=0, start=end, end=scene.end, fps=scene.fps))
+            pieces.append(Scene(index=0, start=pan_end, end=scene.end, fps=scene.fps))
         if len(pieces) == 1:
             return scene
         position = self.scenes.index(scene)
