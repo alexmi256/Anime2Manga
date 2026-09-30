@@ -160,10 +160,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Fraction of high-gradient pixels the guard may remove; lower = stricter",
     )
     parser.add_argument(
-        "--face-budget",
+        "--subject-budget",
         type=float,
         default=0.02,
-        help="Fraction of face pixels that may be removed",
+        help="Fraction of face/head/person pixels that may be removed",
     )
     parser.add_argument(
         "--forward-knee-factor",
@@ -184,7 +184,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--primary-method", default="composite", choices=("composite", *METHODS))
     parser.add_argument(
-        "--no-face-protection", action="store_true", help="Disable the energetic face mask"
+        "--no-subject-protection", action="store_true", help="Disable the energetic subject mask"
     )
     parser.add_argument(
         "--keep-face-boxes", action="store_true", help="Do not strip green overlays"
@@ -214,12 +214,12 @@ def main(argv: list[str] | None = None) -> int:
         energy_baseline_multiple=args.energy_baseline_multiple,
         energy_reference=args.energy_reference,
         detail_budget=args.detail_budget,
-        face_budget=args.face_budget,
+        subject_budget=args.subject_budget,
         forward_knee_factor=args.forward_knee_factor,
         ssim_floor=args.ssim_floor,
         enabled_methods=tuple(m.strip() for m in args.enabled.split(",") if m.strip()),
         primary_method=args.primary_method,
-        protect_faces=not args.no_face_protection,
+        protect_subjects=not args.no_subject_protection,
         strip_overlays=not args.keep_face_boxes,
     )
 

@@ -23,7 +23,7 @@ def build_parser() -> argparse.ArgumentParser:
         description=(
             "Convert an anime video into a manga/storyboard markdown document. "
             "Steps 1-8: metadata, subtitles, scene detection, pan stitching and "
-            "infill, frame selection, audio direction and face detection."
+            "infill, frame selection, audio direction and face/head/person detection."
         ),
     )
     parser.add_argument("input", type=Path, help="Input video (usually .mkv).")
@@ -203,12 +203,56 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
 
-    face = parser.add_argument_group("face detection")
-    face.add_argument(
-        "--face-boxes",
+    detect = parser.add_argument_group("detection")
+    detect.add_argument(
+        "--detect-face",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Detect faces on the chosen frames (default: off; head detection "
+            "usually covers the face)."
+        ),
+    )
+    detect.add_argument(
+        "--detect-head",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help="Draw bounding boxes around detected faces on chosen frames (default: on).",
+        help="Detect heads on the chosen frames (default: on).",
+    )
+    detect.add_argument(
+        "--detect-person",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Detect persons/whole bodies on the chosen frames (default: on).",
+    )
+    detect.add_argument(
+        "--boxes",
+        "--face-boxes",
+        dest="boxes",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Draw bounding boxes for the detected categories on the chosen "
+            "frames (default: on; faces green, heads blue, persons red)."
+        ),
+    )
+    detect.add_argument(
+        "--face-bbox",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Draw face boxes (default: off; requires --detect-face to have a box).",
+    )
+    detect.add_argument(
+        "--head-bbox",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Draw head boxes (default: on).",
+    )
+    detect.add_argument(
+        "--person-bbox",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Draw person boxes (default: on).",
     )
 
     seam = parser.add_argument_group("seam carving")
@@ -350,7 +394,13 @@ def config_from_args(args: argparse.Namespace) -> PipelineConfig:
             band_low_hz=args.audio_band_low,
             band_high_hz=args.audio_band_high,
         ),
-        draw_face_boxes=args.face_boxes,
+        draw_boxes=args.boxes,
+        detect_face=args.detect_face,
+        detect_head=args.detect_head,
+        detect_person=args.detect_person,
+        draw_face_boxes=args.face_bbox,
+        draw_head_boxes=args.head_bbox,
+        draw_person_boxes=args.person_bbox,
         seam_carve=args.seam_carve and args.seam_carve_energy_ratio > 0,
         retarget=RetargetConfig(
             energy_ratio=args.seam_carve_energy_ratio,

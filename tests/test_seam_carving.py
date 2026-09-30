@@ -71,12 +71,72 @@ def test_face_protection_reduces_face_pixels_removed():
     image = rng.integers(0, 255, (80, 120, 3), dtype=np.uint8)
     image[25:55, 70:100] = 128
     face = [FaceBox(x=70, y=25, width=30, height=30)]
-    protected = carve_width(image, 60, faces=face)
-    unprotected = carve_width(image, 60, faces=face, config=SeamCarvingConfig(protect_faces=False))
+    protected = carve_width(image, 60, boxes=face)
+    unprotected = carve_width(image, 60, boxes=face, config=SeamCarvingConfig(protect_subjects=False))
     protected_removed = sum(step.protected_pixels for step in protected.steps)
     unprotected_removed = sum(step.protected_pixels for step in unprotected.steps)
     assert protected.protected_total > 0
     assert protected_removed < unprotected_removed
+
+
+def test_carve_width_rejects_removed_faces_keyword():
+    """The old ``faces`` alias was removed, so passing it is a TypeError."""
+    kwargs: dict = {"faces": [FaceBox(x=1, y=1, width=2, height=2)]}
+    with pytest.raises(TypeError):
+        carve_width(_image(), 40, **kwargs)
+
+
+def test_head_and_person_boxes_are_protected_like_faces():
+    """Every category inherits the same protection: boxes are category-agnostic."""
+    rng = np.random.default_rng(11)
+    image = rng.integers(0, 255, (80, 120, 3), dtype=np.uint8)
+    image[25:55, 70:100] = 128  # a flat, otherwise "free" region
+    heads = [FaceBox(x=70, y=25, width=30, height=30)]
+    protected = carve_width(image, 60, boxes=heads)
+    unprotected = carve_width(
+        image, 60, boxes=heads, config=SeamCarvingConfig(protect_subjects=False)
+    )
+    assert protected.protected_total > 0
+    assert sum(s.protected_pixels for s in protected.steps) < sum(
+        s.protected_pixels for s in unprotected.steps
+    )
+
+
+def test_full_frame_near_degenerate_box_gets_no_protection():
+    """A box covering nearly the whole frame must not clamp the energy factor.
+
+    The subject penalty is ``subject_energy_factor * base_energy``.  When the
+    protected mask spans the frame, that factor is rescaled by the mask's share
+    of the image, so an over-large detector box (a near full-frame head on an
+    extreme close-up) cannot swamp the 50x saliency and make every seam cost the
+    same, which would freeze carving just below the whole-frame box's grid.
+    """
+    image = np.full((80, 120, 3), 128, np.uint8)  # flat: every seam is "free"
+    degenerate = [FaceBox(x=2, y=2, width=116, height=76)]
+    result = carve_width(image, 60, boxes=degenerate)
+    assert result.protected_total > 0
+    # The carve must reach the target width unhindered...
+    assert result.image.shape == (80, 60, 3)
+    assert len(result.steps) == 60
+    # ...and remove no more protected pixels than carving the same boxes with
+    # protection disabled.  The frozen-mask artefact removes every leftover
+    # seam from inside the box, so it would sit far above this baseline.
+    baseline = carve_width(
+        image, 60, boxes=degenerate, config=SeamCarvingConfig(protect_subjects=False)
+    )
+    assert sum(step.protected_pixels for step in result.steps) <= sum(
+        step.protected_pixels for step in baseline.steps
+    )
+
+
+def test_carve_height_protects_rotated_boxes():
+    rng = np.random.default_rng(6)
+    image = rng.integers(0, 255, (80, 80, 3), dtype=np.uint8)
+    image[50:70, 30:50] = 128
+    boxes = [FaceBox(x=30, y=50, width=20, height=20)]
+    result = carve_height(image, 50, boxes=boxes)
+    assert result.protected_total > 0
+    assert result.image.shape == (50, 80, 3)
 
 
 def test_carve_height_reduces_height():
@@ -141,15 +201,30 @@ def test_native_matches_python_quantile_boundary(seed):
 @pytest.mark.skipif(not sc.HAVE_NATIVE, reason="native backend not built")
 def test_native_matches_python_dilation_rounding_boundary():
     # 0.1 * min(25, 37) == 2.5: Python round() and the C++ must both round
-    # half-to-even (radius 2), or the face mask and chosen seams diverge.
+    # half-to-even (radius 2), or the protected mask and chosen seams diverge.
     rng = np.random.default_rng(3)
     image = rng.integers(0, 256, (25, 37, 3), dtype=np.uint8)
     face = [FaceBox(x=8, y=4, width=9, height=9)]
-    cfg = SeamCarvingConfig(face_dilation=0.1)
-    native = carve_width(image, 25, faces=face, config=cfg)
-    python = sc._carve_width_python(image, 25, faces=face, config=cfg)
+    cfg = SeamCarvingConfig(subject_dilation=0.1)
+    native = carve_width(image, 25, boxes=face, config=cfg)
+    python = sc._carve_width_python(image, 25, boxes=face, config=cfg)
     assert native.protected_total == python.protected_total
     assert np.array_equal(native.image, python.image)
+
+
+@pytest.mark.skipif(not sc.HAVE_NATIVE, reason="native backend not built")
+def test_native_matches_python_with_mixed_category_boxes():
+    # Head/person boxes go through the same native path as faces; parity must hold.
+    rng = np.random.default_rng(17)
+    image = rng.integers(0, 255, (80, 120, 3), dtype=np.uint8)
+    boxes = [
+        FaceBox(x=70, y=25, width=30, height=30),
+        FaceBox(x=5, y=40, width=25, height=35),
+    ]
+    native = carve_width(image, 60, boxes=boxes)
+    python = sc._carve_width_python(image, 60, boxes=boxes)
+    assert np.array_equal(native.image, python.image)
+    assert native.protected_total == python.protected_total
 
 
 @pytest.mark.skipif(not sc.HAVE_NATIVE, reason="native backend not built")
@@ -180,13 +255,13 @@ def test_native_matches_python_with_faces_snapshots_and_callback():
     native = carve_width(
         image,
         60,
-        faces=face,
+        boxes=face,
         config=SeamCarvingConfig(record_seams=True),
         snapshot_ratios=(0.0, 0.25),
         on_seam=lambda k, _image, _step: seen.append(k),
     )
     python = sc._carve_width_python(
-        image, 60, faces=face, config=SeamCarvingConfig(record_seams=True),
+        image, 60, boxes=face, config=SeamCarvingConfig(record_seams=True),
         snapshot_ratios=(0.0, 0.25),
     )
     assert np.array_equal(native.image, python.image)

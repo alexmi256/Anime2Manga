@@ -15,9 +15,9 @@ Order of operations
    clearest frame near each scene's subtitle timing (or use the panorama).
 7. Measure the left/right audio balance of each scene so text placement can
    favour the side the dialogue comes from.
-8. Detect faces on each chosen frame, seam-carve a copy of every regular
-   frame (reusing those boxes, before any boxes are drawn), then optionally
-   draw the face bounding boxes onto the saved image.
+8. Detect faces, heads and persons on each chosen frame, seam-carve a copy of
+   every regular frame (reusing the face boxes, before any boxes are drawn),
+   then optionally draw every category's bounding boxes onto the saved image.
 
 Steps 9-10 (cropping, text placement) are stubbed in their own modules and are
 intentionally *not* invoked yet.
@@ -32,12 +32,13 @@ from pathlib import Path
 
 import cv2
 
-from . import audio, faces
+from . import audio, detection, faces, heads, persons
 from .audio import AudioFocusConfig
 from .errors import Anime2MangaError
 from .faces import FaceDetectionConfig
 from .ffmpeg_utils import require_tools
 from .frames import SceneSampler, save_frame, save_image, select_frame
+from .heads import HeadDetectionConfig
 from .inpaint import InpaintConfig, create_inpainter, fill_panorama
 from .metadata import probe_media, resolve_clip_window
 from .models import (
@@ -49,6 +50,7 @@ from .models import (
     SubtitleLine,
 )
 from .panorama import PanConfig, detect_pan, pan_continues, stitch
+from .persons import PersonDetectionConfig
 from .retarget import RetargetConfig, retarget_image
 from .scene_detect import (
     DEFAULT_SCDET_THRESHOLD,
@@ -93,9 +95,19 @@ class PipelineConfig:
     #: Left/right audio focus for each scene (step 7).
     detect_audio: bool = True
     audio: AudioFocusConfig = field(default_factory=AudioFocusConfig)
-    #: Draw detected face bounding boxes onto the saved chosen frames.
-    draw_face_boxes: bool = True
+    #: Detect faces, heads and persons on the chosen frames (step 8).
+    detect_face: bool = False
+    detect_head: bool = True
+    detect_person: bool = True
+    #: Master switch for drawing bounding boxes on the saved frames.
+    draw_boxes: bool = True
+    #: Per-category drawing toggles (all default to the category's ``detect_*``).
+    draw_face_boxes: bool = False
+    draw_head_boxes: bool = True
+    draw_person_boxes: bool = True
     face: FaceDetectionConfig = field(default_factory=FaceDetectionConfig)
+    head: HeadDetectionConfig = field(default_factory=HeadDetectionConfig)
+    person: PersonDetectionConfig = field(default_factory=PersonDetectionConfig)
     #: Produce a seam-carved version of every regular (non-panoramic) frame.
     #: The carver reuses step 8's face boxes and runs before the boxes are
     #: drawn, so the face model is never run twice and the carve sees clean
@@ -127,11 +139,14 @@ def _carve_frame(
     task: tuple[int, str, list, str, RetargetConfig, int],
 ) -> dict | None:
     """Seam-carve one frame in a worker process (module-level for pickling)."""
-    index, frame_path, face_list, out_path, config, quality = task
+    index, frame_path, box_list, out_path, config, quality = task
     image = cv2.imread(frame_path, cv2.IMREAD_COLOR)
     if image is None:
         return None
-    analysis = retarget_image(image, faces=list(face_list), config=config)
+    # The pipeline already detected every subject; hand the boxes straight in so
+    # no model runs again (``protect_heads``/``protect_persons`` are irrelevant
+    # here because ``boxes`` overrides detection).
+    analysis = retarget_image(image, boxes=list(box_list), config=config)
     carved = analysis.recommended_image if analysis.recommended_image is not None else image
     cv2.imwrite(out_path, carved, [int(cv2.IMWRITE_JPEG_QUALITY), quality])
     ratio = analysis.recommended.ratio if analysis.recommended else 0.0
@@ -182,7 +197,7 @@ class Pipeline:
         self._step5_validate()
         self._step6_frames()
         self._step7_audio()
-        self._step8_faces()
+        self._step8_detections()
 
         assert self.media is not None and self.clip is not None
         reindex(self.scenes)
@@ -661,36 +676,118 @@ class Pipeline:
 
             shutil.rmtree(analysis_dir, ignore_errors=True)
 
-    def _step8_faces(self) -> None:
-        """Detect faces, seam-carve regular frames, then optionally draw boxes.
+    def _step8_detections(self) -> None:
+        """Detect faces, heads and persons, seam-carve, then optionally draw.
 
         Detection runs first so the carver can reuse the boxes, and the boxes
-        are painted last so the carve works from clean pixels and the detector
-        is never run twice.
+        are painted last so the carve works from clean pixels and the models are
+        never run twice.
         """
-        detected = 0
-        for scene in self.scenes:
-            if scene.frame_path is None:
-                continue
-            scene.faces = faces.detect_faces(scene.frame_path, config=self.config.face)
-            if not scene.faces:
-                continue
-            detected += len(scene.faces)
-            self.debug(f"scene {scene.index}: {len(scene.faces)} face(s) detected")
-        self.log(f"faces detected: {detected}")
+        cfg = self.config
+        face_count = head_count = person_count = 0
+        if cfg.detect_face or cfg.detect_head or cfg.detect_person:
+            for scene in self.scenes:
+                if scene.frame_path is None:
+                    continue
+                if cfg.detect_face:
+                    scene.faces = faces.detect_faces(scene.frame_path, config=cfg.face)
+                if cfg.detect_head:
+                    scene.heads = heads.detect_heads(scene.frame_path, config=cfg.head)
+                if cfg.detect_person:
+                    scene.persons = persons.detect_persons(
+                        scene.frame_path, config=cfg.person
+                    )
+                face_count += len(scene.faces)
+                head_count += len(scene.heads)
+                person_count += len(scene.persons)
+                if scene.faces or scene.heads or scene.persons:
+                    self.debug(
+                        f"scene {scene.index}: {len(scene.faces)} face(s), "
+                        f"{len(scene.heads)} head(s), {len(scene.persons)} person(s)"
+                    )
+                self._warn_oversized_detections(scene)
+            self.log(
+                f"detections: faces={face_count} heads={head_count} persons={person_count}"
+            )
 
         self._step8b_seam_carve()
 
-        if self.config.draw_face_boxes:
+        if cfg.draw_boxes:
             for scene in self.scenes:
-                if scene.frame_path is not None and scene.faces:
-                    faces.annotate_faces(scene.frame_path, scene.faces)
+                if scene.frame_path is None:
+                    continue
+                groups = self._drawing_groups(scene)
+                if any(boxes for _, boxes in groups):
+                    detection.annotate_categories(scene.frame_path, groups)
+
+    def _warn_oversized_detections(self, scene: Scene) -> None:
+        """Flag detections that cover almost the whole frame (likely artefacts).
+
+        The detectors can return a near full-frame box on an extreme close-up;
+        the seam carver already neutralises such masks, so this is only a nudge
+        to tune thresholds.  Nothing is dropped.
+        """
+        if scene.frame_size is None:
+            return
+        configs = {
+            "face": self.config.face,
+            "head": self.config.head,
+            "person": self.config.person,
+        }
+        for category, boxes in self._box_groups(scene):
+            limit = configs[category].max_box_area_fraction
+            oversized = detection.oversized_boxes(
+                boxes, scene.frame_size, max_area_fraction=limit
+            )
+            for box in oversized:
+                share = box.area / (scene.frame_size[0] * scene.frame_size[1])
+                self.debug(
+                    f"scene {scene.index}: {category} box covers {share:.0%} of the "
+                    f"frame (area {box.area}); detections this large are usually "
+                    "artefacts - consider raising the score threshold"
+                )
+
+    def _box_groups(self, scene: Scene) -> list[tuple[str, list]]:
+        """The ``(category, boxes)`` pairs to detect/draw/protect for ``scene``.
+
+        A category is included only when its detector is enabled, so the
+        seam-carving protection and the drawn boxes follow exactly what was
+        detected (faces default off, heads and persons on).
+        """
+        cfg = self.config
+        return [
+            ("face", list(scene.faces) if cfg.detect_face else []),
+            ("head", list(scene.heads) if cfg.detect_head else []),
+            ("person", list(scene.persons) if cfg.detect_person else []),
+        ]
+
+    def _drawing_groups(self, scene: Scene) -> list[tuple[str, list]]:
+        """The ``(category, boxes)`` pairs to actually paint for ``scene``."""
+        cfg = self.config
+        enabled = {
+            "face": cfg.draw_face_boxes,
+            "head": cfg.draw_head_boxes,
+            "person": cfg.draw_person_boxes,
+        }
+        return [
+            (category, boxes)
+            for category, boxes in self._box_groups(scene)
+            if enabled[category]
+        ]
+
+    def _protected_boxes(self, scene: Scene) -> list:
+        """All detected boxes (every enabled category) for seam-carving.
+
+        Faces, heads and persons all inherit the same seam-carving protection,
+        so the carver keeps every detected subject intact.
+        """
+        return [box for _category, boxes in self._box_groups(scene) for box in boxes]
 
     def _step8b_seam_carve(self) -> None:
         """Write a seam-carved copy of each regular frame and record its shrink.
 
         Panoramic scenes keep their stitched canvas untouched; every other scene
-        with a chosen frame is carved down from the frame's own detected faces.
+        with a chosen frame is carved down from the frame's own detected boxes.
         The recommendation is the composite limit (``energy`` + ``detail``).
         The carve runs at the config's working width (768px by default, ~13x
         faster than native; pass ``working_width=None`` /
@@ -709,7 +806,7 @@ class Pipeline:
                 (
                     scene.index,
                     str(scene.frame_path),
-                    list(scene.faces),
+                    self._protected_boxes(scene),
                     str(out_path),
                     cfg.retarget,
                     cfg.seam_carve_quality,

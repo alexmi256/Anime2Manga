@@ -18,10 +18,11 @@ TOG 2008) rather than the classic backward energy of Avidan & Shamir
 the two pixels a seam pixel used to separate, which removes far fewer visible
 artefacts (bent straight lines, ghosting) at aggressive shrink factors.
 
-Faces (step 8) are protected by adding a large, configurable amount of energy
-inside a dilated face mask, so the dynamic program steers seams around them.
+Faces, heads and persons (step 8) are all protected by adding a large,
+configurable amount of energy inside a dilated mask, so the dynamic program
+steers seams around them - the engine treats every detection box the same way.
 The engine also reports, per removed seam, how much high-detail and protected
-(face) content it touched - the raw signals the retarget metrics consume.
+content it touched - the raw signals the retarget metrics consume.
 
 Only vertical seams are carved here; :func:`carve_height` reuses the same code
 on a transposed image.
@@ -91,11 +92,11 @@ _CarveProto = ctypes.CFUNCTYPE(
     ctypes.c_int,  # height
     ctypes.c_int,  # width
     ctypes.c_int,  # target_width
-    ctypes.POINTER(ctypes.c_int),  # faces
-    ctypes.c_int,  # n_faces
-    ctypes.c_int,  # protect_faces
-    ctypes.c_double,  # face_dilation
-    ctypes.c_double,  # face_energy_factor
+    ctypes.POINTER(ctypes.c_int),  # boxes
+    ctypes.c_int,  # n_boxes
+    ctypes.c_int,  # protect_subjects
+    ctypes.c_double,  # subject_dilation
+    ctypes.c_double,  # subject_energy_factor
     ctypes.c_double,  # detail_quantile
     ctypes.c_int,  # record_seams
     ctypes.c_int,  # n_snapshots
@@ -119,10 +120,10 @@ _NATIVE_CARVE = _CarveProto(_native_module.carve_addr()) if _native_module is no
 #: True when the compiled engine is available and :func:`carve_width` uses it.
 HAVE_NATIVE = _NATIVE_CARVE is not None
 
-#: Energy added to pixels inside the face mask, as a multiple of the image's
-#: mean gradient energy.  Large enough that a seam only crosses a face when no
-#: alternative path exists.
-DEFAULT_FACE_ENERGY_FACTOR = 50.0
+#: Energy added to pixels inside the protected mask, as a multiple of the
+#: image's mean gradient energy.  Large enough that a seam only crosses a
+#: detected subject when no alternative path exists.
+DEFAULT_SUBJECT_ENERGY_FACTOR = 50.0
 #: Fraction of the highest-energy pixels treated as "detail" for the budget
 #: metric (top 20%).
 DEFAULT_DETAIL_QUANTILE = 0.8
@@ -132,13 +133,13 @@ DEFAULT_DETAIL_QUANTILE = 0.8
 class SeamCarvingConfig:
     """Tunables for the seam-carving engine."""
 
-    #: Add a large energy term inside ``face_mask`` so seams avoid faces.
-    protect_faces: bool = True
-    #: Face-mask dilation as a fraction of the smaller image side, so the
+    #: Add a large energy term inside the masked ``boxes`` so seams avoid them.
+    protect_subjects: bool = True
+    #: Protected-mask dilation as a fraction of the smaller image side, so the
     #: protected halo scales with resolution.  ``0`` protects the box exactly.
-    face_dilation: float = 0.01
-    #: Multiplier (of the mean gradient energy) applied inside the face mask.
-    face_energy_factor: float = DEFAULT_FACE_ENERGY_FACTOR
+    subject_dilation: float = 0.01
+    #: Multiplier (of the mean gradient energy) applied inside the protected mask.
+    subject_energy_factor: float = DEFAULT_SUBJECT_ENERGY_FACTOR
     #: Energy quantile (top ``1 - q``) counted as "detail" in the budget metric.
     detail_quantile: float = DEFAULT_DETAIL_QUANTILE
     #: OpenCV threading; seam carving is single-threaded per image and the
@@ -168,7 +169,7 @@ class SeamStep:
     added_energy: float
     #: Number of removed pixels that were in the original "detail" set.
     detail_pixels: int
-    #: Number of removed pixels that were inside the protected (face) mask.
+    #: Number of removed pixels that were inside the protected mask.
     protected_pixels: int
     #: Sum of gradient energy over the whole image after the removal.
     energy_sum_after: float
@@ -273,7 +274,7 @@ def find_vertical_seam(
     With ``forward`` costs the accumulation minimises the energy *added* by the
     removal; otherwise it minimises the classic backward energy sum.  An
     optional ``saliency`` array adds a fixed per-pixel cost (used to keep seams
-    off faces).
+    off the protected subjects).
 
     Returns the seam's column index per row and the forward cost contributed
     per row (``0`` when carving backward).
@@ -322,25 +323,46 @@ def _remove_vertical_seam(image: np.ndarray, seam: np.ndarray) -> np.ndarray:
     return image[keep].reshape(height, width - 1, *image.shape[2:])
 
 
-def _face_mask(shape: tuple[int, int], faces: list, config: SeamCarvingConfig) -> np.ndarray | None:
-    """Build a boolean mask covering the faces, scaled to the working image.
+def _subject_energy(mask: np.ndarray | None, base_energy: float, config: SeamCarvingConfig) -> float:
+    """Saliency added inside the protected mask.
 
-    The mask is built whenever faces are known, even if protection is disabled,
-    so the engine can still report how many face pixels each seam removed.
+    ``subject_energy_factor`` sets the strength, but a near full-frame box (a
+    head detector's whole-frame hit on an extreme close-up) would otherwise put
+    almost the entire image under the same large saliency plateau.  Every seam
+    then costs the same and the carve freezes a few columns short of the box
+    grid.  Scaling the factor by the mask's share of the image means a
+    whole-frame mask adds only a constant (seam-independent) offset - harmless,
+    since a constant raises all paths equally - while a small subject keeps the
+    full penalty.  ``_seamcarve.cpp`` computes the same value.
     """
-    if not faces:
+    if mask is None or not config.protect_subjects:
+        return 0.0
+    share = float(mask.mean())
+    return config.subject_energy_factor * (1.0 - share) * base_energy
+
+
+def _detection_mask(
+    shape: tuple[int, int], boxes: list, config: SeamCarvingConfig
+) -> np.ndarray | None:
+    """Build a boolean mask covering every detection box, scaled to the image.
+
+    Faces, heads and persons are all treated the same.  The mask is built
+    whenever boxes are known, even if protection is disabled, so the engine can
+    still report how many protected pixels each seam removed.
+    """
+    if not boxes:
         return None
     height, width = shape
     mask = np.zeros((height, width), np.uint8)
-    for box in faces:
+    for box in boxes:
         x0 = max(0, int(box.x))
         y0 = max(0, int(box.y))
         x1 = min(width, int(box.x + box.width))
         y1 = min(height, int(box.y + box.height))
         if x1 > x0 and y1 > y0:
             mask[y0:y1, x0:x1] = 1
-    if config.face_dilation > 0 and mask.any():
-        radius = max(1, round(config.face_dilation * min(height, width)))
+    if config.subject_dilation > 0 and mask.any():
+        radius = max(1, round(config.subject_dilation * min(height, width)))
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (radius * 2 + 1,) * 2)
         mask = cv2.dilate(mask, kernel)
     return mask.astype(bool)
@@ -350,7 +372,7 @@ def _carve_width_native(
     image: np.ndarray,
     target_width: int,
     *,
-    faces: list | None,
+    boxes: list | None,
     config: SeamCarvingConfig,
     on_seam: Callable[[int, np.ndarray, SeamStep], None] | None,
     snapshot_ratios: tuple[float, ...],
@@ -360,11 +382,11 @@ def _carve_width_native(
     height, width = image.shape[:2]
     image = np.ascontiguousarray(image)
 
-    face_rows = [(int(b.x), int(b.y), int(b.width), int(b.height)) for b in (faces or [])]
-    face_arr = np.asarray(face_rows, np.int32) if face_rows else None
-    face_ptr = (
-        face_arr.ctypes.data_as(ctypes.POINTER(ctypes.c_int))
-        if face_arr is not None
+    box_rows = [(int(b.x), int(b.y), int(b.width), int(b.height)) for b in (boxes or [])]
+    box_arr = np.asarray(box_rows, np.int32) if box_rows else None
+    box_ptr = (
+        box_arr.ctypes.data_as(ctypes.POINTER(ctypes.c_int))
+        if box_arr is not None
         else ctypes.POINTER(ctypes.c_int)()
     )
 
@@ -438,11 +460,11 @@ def _carve_width_native(
         height,
         width,
         target_width,
-        face_ptr,
-        len(face_rows),
-        int(config.protect_faces),
-        config.face_dilation,
-        config.face_energy_factor,
+        box_ptr,
+        len(box_rows),
+        int(config.protect_subjects),
+        config.subject_dilation,
+        config.subject_energy_factor,
         config.detail_quantile,
         int(config.record_seams),
         n_snap,
@@ -503,16 +525,19 @@ def carve_width(
     image: np.ndarray,
     target_width: int,
     *,
-    faces: list | None = None,
+    boxes: list | None = None,
     config: SeamCarvingConfig | None = None,
     on_seam: Callable[[int, np.ndarray, SeamStep], None] | None = None,
     snapshot_ratios: tuple[float, ...] = (),
 ) -> CarveResult:
     """Remove vertical seams from ``image`` until it is ``target_width`` wide.
 
+    ``boxes`` are the detected subjects (face, head or person boxes) to protect;
+    the engine treats them uniformly as "protected content".
+
     Dispatches to the compiled engine when available (see :data:`HAVE_NATIVE`)
     and to the pure-Python implementation otherwise.  The two are behaviourally
-    identical; ``faces``, ``on_seam`` and ``snapshot_ratios`` work with both.
+    identical; ``boxes``, ``on_seam`` and ``snapshot_ratios`` work with both.
     """
     cfg = config or SeamCarvingConfig()
     if cfg.threads > 0:
@@ -526,7 +551,7 @@ def carve_width(
         return _carve_width_python(
             original,
             target,
-            faces=faces,
+            boxes=boxes,
             config=cfg,
             on_seam=on_seam,
             snapshot_ratios=snapshot_ratios,
@@ -534,7 +559,7 @@ def carve_width(
     return _carve_width_native(
         original,
         target,
-        faces=faces,
+        boxes=boxes,
         config=cfg,
         on_seam=on_seam,
         snapshot_ratios=snapshot_ratios,
@@ -545,15 +570,16 @@ def _carve_width_python(
     image: np.ndarray,
     target_width: int,
     *,
-    faces: list | None = None,
+    boxes: list | None = None,
     config: SeamCarvingConfig | None = None,
     on_seam: Callable[[int, np.ndarray, SeamStep], None] | None = None,
     snapshot_ratios: tuple[float, ...] = (),
 ) -> CarveResult:
     """Remove vertical seams from ``image`` until it is ``target_width`` wide.
 
-    ``faces`` are :class:`~anime2manga.models.FaceBox` values in the *working
-    image's* pixel space.  ``on_seam`` is called with the 1-based seam index,
+    ``boxes`` are :class:`~anime2manga.models.DetectionBox` values (faces,
+    heads or persons) in the *working image's* pixel space; they are protected
+    identically.  ``on_seam`` is called with the 1-based seam index,
     the image *after* the removal and the :class:`SeamStep`, which lets callers
     measure quality without the engine depending on the metrics.  Images whose
     ``ratio`` crosses a value in ``snapshot_ratios`` are kept in
@@ -574,7 +600,7 @@ def _carve_width_python(
         energy0 = gradient_energy(gray)
         mean0 = float(energy0.mean())
         detail_threshold = float(np.quantile(energy0, cfg.detail_quantile))
-        mask = _face_mask((height0, width0), list(faces or []), cfg)
+        mask = _detection_mask((height0, width0), list(boxes or []), cfg)
         return CarveResult(
             image=original,
             steps=[],
@@ -587,7 +613,7 @@ def _carve_width_python(
             snapshots={r: original.copy() for r in snapshot_ratios if r <= 0},
         )
 
-    mask = _face_mask((height0, width0), list(faces or []), cfg)
+    mask = _detection_mask((height0, width0), list(boxes or []), cfg)
     # Detail threshold is fixed from the original image so the budget counts a
     # stable set of "important" pixels.
     gray0 = cv2.cvtColor(original, cv2.COLOR_BGR2GRAY)
@@ -603,16 +629,14 @@ def _carve_width_python(
     seams: list[np.ndarray] = []
     snapshots: dict[float, np.ndarray] = {r: original.copy() for r in snapshot_ratios if r <= 0}
     pending = sorted(r for r in snapshot_ratios if r > 0)
-    face_energy = (
-        cfg.face_energy_factor * base_energy if (cfg.protect_faces and mask is not None) else 0.0
-    )
+    subject_energy = _subject_energy(mask, base_energy, cfg)
     mask_f = mask.astype(np.float32) if mask is not None else None
 
     while current.shape[1] > target_width:
         gray = cv2.cvtColor(current, cv2.COLOR_BGR2GRAY)
         energy = gradient_energy(gray)
         forward = _forward_costs(gray)
-        saliency = mask_f * face_energy if (mask_f is not None and face_energy > 0) else None
+        saliency = mask_f * subject_energy if (mask_f is not None and subject_energy > 0) else None
         seam, added = find_vertical_seam(energy, forward=forward, saliency=saliency)
         if cfg.record_seams:
             seams.append(seam.copy())
@@ -663,18 +687,18 @@ def carve_height(
     image: np.ndarray,
     target_height: int,
     *,
-    faces: list | None = None,
+    boxes: list | None = None,
     config: SeamCarvingConfig | None = None,
     on_seam: Callable[[int, np.ndarray, SeamStep], None] | None = None,
     snapshot_ratios: tuple[float, ...] = (),
 ) -> CarveResult:
     """Remove horizontal seams by carving a transposed copy of the image."""
     rotated = cv2.rotate(_as_bgr(image), cv2.ROTATE_90_CLOCKWISE)
-    rotated_faces = None
-    if faces:
+    rotated_boxes = None
+    if boxes:
         height = image.shape[0]
         # A box (x, y, w, h) becomes (x', y', w', h') after a clockwise turn.
-        rotated_faces = [
+        rotated_boxes = [
             type(box)(
                 x=height - (box.y + box.height),
                 y=box.x,
@@ -682,12 +706,12 @@ def carve_height(
                 height=box.width,
                 confidence=getattr(box, "confidence", 1.0),
             )
-            for box in faces
+            for box in boxes
         ]
     result = carve_width(
         rotated,
         target_height,
-        faces=rotated_faces,
+        boxes=rotated_boxes,
         config=config,
         on_seam=on_seam,
         snapshot_ratios=snapshot_ratios,

@@ -49,9 +49,14 @@ scripts/anime2manga.sh input.mkv -o output --start-at 02:00 --end-at 20:00
 scripts/anime2manga.sh input.mkv --subtitle-language por
 scripts/anime2manga.sh input.mkv --subtitle-track 5
 
-# Face boxes are drawn on the chosen frames by default; turn drawing off (boxes
-# are still detected and listed in the report):
-scripts/anime2manga.sh input.mkv --no-face-boxes
+# Faces, heads and persons are detected by default, except faces (head detection
+# usually covers the face). Boxes are drawn for each detected category: faces
+# green, heads blue, persons red. Toggle each detector or box individually:
+scripts/anime2manga.sh input.mkv --detect-face
+scripts/anime2manga.sh input.mkv --no-detect-head
+scripts/anime2manga.sh input.mkv --no-person-bbox
+# --no-boxes hides every box at once; --no-face-boxes is an accepted alias.
+scripts/anime2manga.sh input.mkv --no-boxes
 
 # Seam carving (step 8b) is on by default at energy ratio 0.25. Retune it, or
 # disable it entirely with a ratio of 0 (or --no-seam-carve):
@@ -88,7 +93,7 @@ a video with no subtitles fails with a clear message.
 | 5. Timeline validation (no gaps/overlaps) | `timeline.py` | implemented |
 | 6. Frame sampling and clearest-frame selection | `frames.py` | implemented |
 | 7. Left/right audio focus | `audio.py` | implemented |
-| 8. Face detection, optional bounding boxes on chosen frames | `faces.py` | implemented |
+| 8. Face, head and person detection, optional bounding boxes on chosen frames | `detection.py`, `faces.py`, `heads.py`, `persons.py` | implemented |
 | 8b. Seam-carve a copy of each regular frame (`--seam-carve`) | `seam_carving.py`, `retarget.py` | implemented |
 | 9. Face-aware cropping | `cropping.py` | stub |
 | 10. Text/bubble placement | `text_layout.py` | stub |
@@ -207,33 +212,47 @@ module using numpy on top of the ffmpeg the pipeline already requires.
   `audiocheck.net_L.ogg` / `audiocheck.net_R.ogg` samples, which score far
   beyond the threshold in the correct direction.
 
-## How faces are found
+## How faces, heads and persons are found
 
 Anime faces are stylised (flat cel shading, oversized eyes, exaggerated
 geometry), so photographic detectors such as the Haar frontal-face cascade or
-YuNet miss many of them.  Face detection uses the
-[DeepGHS anime face detector](https://huggingface.co/deepghs/anime_face_detection)
-(`face_detect_v1.4_n`, MIT): a YOLOv8n single-class model trained on anime
-faces (F1 ≈ 0.94).  It is bundled under `src/anime2manga/data/` and runs through
-`cv2.dnn`, so there is no ML framework or model download.
+YuNet miss many of them.  Detection uses three single-class
+[DeepGHS](https://huggingface.co/deepghs) YOLOv8 detectors, each bundled under
+`src/anime2manga/data/` and run through `cv2.dnn`, so there is no ML framework
+or model download:
+
+| Category | Model | Model card | Colour |
+| -------- | ----- | ---------- | ------ |
+| face | `face_detect_v1.4_n` | [anime_face_detection](https://huggingface.co/deepghs/anime_face_detection) | green |
+| head | `head_detect_v2.0_s` | [anime_head_detection](https://huggingface.co/deepghs/anime_head_detection) | blue |
+| person | `person_detect_v1.3_s` | [anime_person_detection](https://huggingface.co/deepghs/anime_person_detection) | red |
+
+All three share one engine (`detection.py`); `faces.py`, `heads.py` and
+`persons.py` only pin each model, its score threshold and its drawing colour.
 
 1. Letterbox the frame to the model's square input (default 960, preserving
-   aspect ratio) at several content scales. A scale of `1.0` sees faces at their
-   normal size, while `0.5` shrinks the frame inside the canvas so very large
-   close-up faces fall back into the model's training scale; a single 960 pass
-   misses them.
+   aspect ratio) at one or more content scales. A scale of `1.0` sees targets at
+   their normal size, while `0.5` shrinks the frame inside the canvas so very
+   large close-ups fall back into the model's training scale; a single 960 pass
+   misses them. Faces and heads use `(1.0, 0.5)`, persons a single `1.0` pass.
 2. Run the network at each scale, decode the `(cx, cy, w, h, score)` rows and
-   keep detections above `score_threshold` (default 0.2, below the model card's
-   F1 optimum because missed faces were the priority).
+   keep detections above `score_threshold` (the model card's F1-optimal
+   threshold: `0.2` face, `0.413` head, `0.324` person).
 3. Non-maximum-suppress overlaps across all scales and return full-resolution
    frame-pixel boxes.
 
-The model can be overridden with `FaceDetectionConfig.model_path` or the
-`ANIME2MANGA_ANIME_FACE_MODEL` environment variable; `content_scales` and
-`score_threshold` are tunable on `FaceDetectionConfig`.
+Each model can be overridden through its config's `model_path` or its
+environment variable (`ANIME2MANGA_ANIME_FACE_MODEL`,
+`ANIME2MANGA_ANIME_HEAD_MODEL`, `ANIME2MANGA_ANIME_PERSON_MODEL`).
 
-By default boxes are also drawn onto the saved chosen frame (`--no-face-boxes`
-disables the drawing; the boxes are still detected and listed in the report).
+**Detection is per-category.** Head and person detection are on by default; face
+detection is off by default because head detection usually covers the face, so
+the extra model run is rarely needed. Each has its own detector flag
+(`--detect-head`, `--detect-person`, `--detect-face`) and its own box flag
+(`--head-bbox`, `--person-bbox`, `--face-bbox`). Boxes are drawn green (face),
+blue (head) and red (person) by default; `--no-boxes` hides them all without
+disabling detection. The report lists `Face Bounding Boxes:`, then
+`Head Bounding Boxes:` and `Person Bounding Boxes:` for each scene.
 
 Detection is not perfect: very stylised or masked/non-human faces can still be
 missed, and decorative patterns that resemble a face (e.g. skull ornaments) can
@@ -254,8 +273,8 @@ builds - and the pipeline uses the compiled one whenever it is available.
 
 * **In the pipeline (step 8b).**  Every regular frame is carved automatically
   (`--seam-carve`, on by default at energy ratio `0.25`; a ratio of `0` or
-  `--no-seam-carve` disables it).  It reuses step 8's face boxes and runs
-  *before* boxes are drawn, so the detector never runs twice and the carve sees
+  `--no-seam-carve` disables it).  It reuses step 8's boxes and runs
+  *before* boxes are drawn, so the detectors never run twice and the carve sees
   clean pixels; panoramas are never carved.  The carved still is written to
   `seam_frames/` at 768px working width by default (an order of magnitude faster
   than carving at source resolution; pass `--seam-carve-working-width 0` for
@@ -268,8 +287,9 @@ builds - and the pipeline uses the compiled one whenever it is available.
 * **Engine.** Energy is the L1 gradient magnitude `|dI/dx| + |dI/dy|`; seams
   are chosen with **forward energy** (Rubinstein, Shamir & Avidan, TOG 2008),
   which minimises the energy *introduced* by a removal and so bends far fewer
-  lines than the classic backward method.  Faces (step 8) get a large added
-  energy term inside a dilated box so seams steer around them.  Frames are
+  lines than the classic backward method.  Every detected subject (face, head or
+  person, step 8) gets a large added energy term inside a dilated box so seams
+  steer around them.  Frames are
   downscaled to a 768px working width first by default (about 13x faster than
   carving 1080p at native resolution); set `--seam-carve-working-width 0` to
   carve at source resolution.  The brief's **50% cap** is always enforced.
@@ -280,7 +300,7 @@ builds - and the pipeline uses the compiled one whenever it is available.
   | ----- | ------ | ------------ |
   | `energy` | removed-seam energy / image mean, with a per-frame adaptive floor | ratio 0.35 (or 1.4x the frame's early baseline) |
   | `forward` | cumulative forward energy per pixel / warm-up baseline | 2.5x |
-  | `detail` | high-gradient pixels removed, plus face pixels removed | 10% / 2% |
+  | `detail` | high-gradient pixels removed, plus protected (subject) pixels removed | 10% / 2% |
   | `ssim` | structural similarity to the uniformly-rescaled original | 0.5 |
 
   The composite `badness` is the worst enabled normalised guard, so it reaches
@@ -362,7 +382,11 @@ Is Panoramic: No
 Frame Time: 00:02:04.245
 Frame Number: 2979
 Face Bounding Boxes:
-- x=812, y=356, width=180, height=196, confidence=0.74
+- (no faces detected)
+Head Bounding Boxes:
+- x=639, y=0, width=1280, height=1080, confidence=0.57
+Person Bounding Boxes:
+- x=25, y=4, width=1300, height=1070, confidence=0.37
 
 ## Text
 - What? Two death's heads again?
@@ -388,6 +412,10 @@ Pan End Frame: 3094
 Frame Time: 00:02:07.525
 Face Bounding Boxes:
 - (no faces detected)
+Head Bounding Boxes:
+- (no heads detected)
+Person Bounding Boxes:
+- (no persons detected)
 
 ## Text
 - (no subtitles)

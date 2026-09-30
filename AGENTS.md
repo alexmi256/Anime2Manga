@@ -45,9 +45,10 @@ Runtime dependencies are deliberately small: `numpy`, `opencv-python`,
 - `src/anime2manga/` — the package.
   - `pipeline.py` — orchestration (steps 1–8) and `PipelineConfig`; the seam-carve step lives here (`_step8b_seam_carve`).
   - `cli.py` — argparse CLI and `config_from_args`; one argument group per feature.
-  - `models.py` — shared dataclasses (`Scene`, `FaceBox`, `PipelineResult`, …).
+  - `models.py` — shared dataclasses (`Scene`, `DetectionBox`/`FaceBox`, `PipelineResult`, …).
   - `report.py` — `report.md` and `scenes.json` writers.
-  - `metadata.py`, `subtitles.py`, `scene_detect.py`, `panorama.py`, `inpaint.py`, `timeline.py`, `frames.py`, `audio.py`, `faces.py` — pipeline stages.
+  - `metadata.py`, `subtitles.py`, `scene_detect.py`, `panorama.py`, `inpaint.py`, `timeline.py`, `frames.py`, `audio.py`, `faces.py`, `heads.py`, `persons.py` — pipeline stages.
+  - `detection.py` — the shared single-class YOLOv8 engine (letterbox, multi-scale decode, NMS, coloured drawing) used by `faces`/`heads`/`persons`.
   - `cropping.py`, `text_layout.py`, `translation.py`, `motion_vectors.py` — stubs.
   - `seam_carving.py` — content-aware retargeting engine (step 8b / standalone); `_seamcarve.cpp` — its native C++ backend (built by `setup.py`, driven through `ctypes`); `retarget.py` — the retarget metrics.
   - `retarget_report.py` — rendering for the standalone experiment report.
@@ -76,11 +77,20 @@ Runtime dependencies are deliberately small: `numpy`, `opencv-python`,
 ## Pipeline ordering and contracts
 
 `Pipeline.run()`: metadata → subtitles → scene detection → panoramas + infill →
-timeline validation → frame selection → audio → faces. `_step8_faces` **detects
-faces, then seam-carves regular frames, then draws boxes** (`--face-boxes`). The
+timeline validation → frame selection → audio → detections. `_step8_detections`
+**detects faces, heads and persons, then seam-carves regular frames, then draws
+boxes**. Detection and drawing are **per-category** and independent:
+`detect_face` (default **off**, head detection usually covers the face),
+`detect_head` and `detect_person` (default on); `draw_face_boxes` (default
+off), `draw_head_boxes` and `draw_person_boxes` (default on) under the
+`draw_boxes` master switch. CLI: `--detect-face/--no-detect-face`,
+`--detect-head`, `--detect-person`, `--face-bbox/--head-bbox/--person-bbox`,
+`--no-boxes` (all boxes); `--face-boxes` is a legacy alias for `--boxes`. The
 carve must run before annotation so it sees clean pixels, and it reuses the
-detected `FaceBox`es so the model never runs twice. Panoramic scenes are never
-seam-carved.
+detected boxes (every enabled category) so the models never run twice.
+Panoramic scenes are never seam-carved. Faces, heads and persons are drawn in
+distinct colours (green / blue / red) and are listed under
+`Face`/`Head`/`Person Bounding Boxes:` in the report.
 
 `scenes.json` is machine-readable and must stay in sync with `report.md`.
 
@@ -93,10 +103,21 @@ seam-carved.
   rounding. The native engine lives in `_seamcarve.cpp`; `_seamcarve.pyi` is its
   type stub. `carve_height` transposes and calls the same path.
 - **Engine** (`seam_carving.py` / `_seamcarve.cpp`): L1 gradient energy; seams
-  chosen with **forward energy**; faces get a large additive energy inside a
-  dilated mask so seams route around them; 50% width cap; frames are optionally
+  chosen with **forward energy**; every detected subject (face, head or person)
+  gets a large additive energy inside a dilated mask so seams route around it —
+  the native and Python engines take one `boxes` list (the old `faces` keyword
+  was removed, not kept as an alias) and treat every box identically regardless
+  of category; 50% width cap; frames are optionally
   downscaled to `working_width` before carving. `record_seams`/`reconstruct`
   allow rebuilding any intermediate width.
+- **Subject saliency is share-scaled** (`seam_carving._subject_energy`): the
+  additive penalty is `subject_energy_factor * (1 - mask_share) * base_energy`.
+  A near full-frame box (a head detector's whole-frame hit on a close-up) would
+  otherwise put the whole image on one saliency plateau, giving every seam the
+  same cost and freezing the carve. This is a deliberate behaviour change from
+  the original `factor * base_energy`; the C++ engine computes the identical
+  value. `detection.oversized_boxes` surfaces >90% boxes as a diagnostics-only
+  warning (never dropped).
 - **Metrics** (`retarget.py`): guards `energy`, `forward`, `detail`, `ssim`.
   Composite `badness = max(normalised enabled guard signals)`, so the composite
   limit is the **minimum of the enabled guards' stop ratios**; default enabled
@@ -135,8 +156,8 @@ seam-carved.
 ## Validation expectations
 
 - Run `just check` (or ruff + pyrefly + pytest) before considering work done.
-- The suite is currently ~200 passing, 2 skipped; keep it green and add tests
-  for new behaviour (especially branches the CLI actually uses, e.g. `jobs > 1`).
+- The suite grows with the project; keep it green and add tests for new
+  behaviour (especially branches the CLI actually uses, e.g. `jobs > 1`).
 - Seam carving has two backends: keep `tests/test_seam_carving.py` covering
   native-vs-Python parity (skipped when unbuilt) and the pure-Python fallback
   (monkeypatch `_NATIVE_CARVE` to `None`).

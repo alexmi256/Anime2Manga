@@ -14,12 +14,12 @@ import cv2
 import numpy as np
 import pytest
 
-from anime2manga import faces
+from anime2manga import detection
+from anime2manga.detection import _letterbox
 from anime2manga.errors import Anime2MangaError
 from anime2manga.faces import (
     MODEL_ENV_VAR,
     FaceDetectionConfig,
-    _letterbox,
     annotate_faces,
     detect_faces,
     detect_faces_in_image,
@@ -48,7 +48,7 @@ class _FakeNet:
 
 
 def _patch_detections(monkeypatch, detections):
-    monkeypatch.setattr(faces, "_detect_raw", lambda image, config: list(detections))
+    monkeypatch.setattr(detection, "_detect_raw", lambda image, config: list(detections))
 
 
 def _image() -> np.ndarray:
@@ -58,7 +58,7 @@ def _image() -> np.ndarray:
 
 
 def test_bundled_model_loads():
-    assert faces._load_net(str(model_path())) is not None
+    assert detection._load_net(str(model_path())) is not None
 
 
 def test_model_path_precedence(tmp_path, monkeypatch):
@@ -73,7 +73,7 @@ def test_model_path_precedence(tmp_path, monkeypatch):
 
 def test_missing_model_raises(tmp_path):
     with pytest.raises(Anime2MangaError):
-        faces._load_net(str(tmp_path / "nope.onnx"))
+        detection._load_net(str(tmp_path / "nope.onnx"))
 
 
 def test_letterbox_preserves_aspect_ratio():
@@ -96,9 +96,9 @@ def test_decode_maps_predictions_back_to_frame(monkeypatch):
     # A face centred at (125, 110) with size 50x60 in a 400x300 frame maps to
     # (300, 384, 120, 144) after a 2.4x letterbox with 120px top padding.
     predictions = np.array([[[300.0], [384.0], [120.0], [144.0], [0.9]]])
-    monkeypatch.setattr(faces, "_load_net", lambda path: _FakeNet(predictions))
+    monkeypatch.setattr(detection, "_load_net", lambda path: _FakeNet(predictions))
     config = FaceDetectionConfig(content_scales=(1.0,))
-    assert faces._detect_raw(_image(), config) == [(100, 80, 50, 60, 0.9)]
+    assert detection._detect_raw(_image(), config) == [(100, 80, 50, 60, 0.9)]
 
 
 def test_detect_runs_every_content_scale(monkeypatch):
@@ -108,9 +108,9 @@ def test_detect_runs_every_content_scale(monkeypatch):
         seen.append(content_scale)
         return [(1, 2, 3, 4, 0.9)]
 
-    monkeypatch.setattr(faces, "_load_net", lambda path: object())
-    monkeypatch.setattr(faces, "_run_net", fake_run)
-    faces._detect_raw(_image(), FaceDetectionConfig(content_scales=(1.0, 0.5, 0.25)))
+    monkeypatch.setattr(detection, "_load_net", lambda path: object())
+    monkeypatch.setattr(detection, "_run_net", fake_run)
+    detection._detect_raw(_image(), FaceDetectionConfig(content_scales=(1.0, 0.5, 0.25)))
     assert seen == [1.0, 0.5, 0.25]
 
 

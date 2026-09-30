@@ -190,3 +190,35 @@ def test_write_report_and_json(tmp_path):
     data = json.loads(json_path.read_text())
     assert data["input"] == "input.mkv"
     assert len(data["scenes"]) == 2
+
+
+def test_report_lists_head_and_person_boxes(tmp_path):
+    result = _result(tmp_path)
+    scene = result.scenes[0]
+    scene.heads = [FaceBox(1, 2, 3, 4, 0.5)]
+    scene.persons = [FaceBox(5, 6, 7, 8, 0.6)]
+    text = build_markdown(result)
+    # Face, head and person sections appear in that order.
+    assert text.index("Face Bounding Boxes:") < text.index("Head Bounding Boxes:")
+    assert text.index("Head Bounding Boxes:") < text.index("Person Bounding Boxes:")
+    assert "- x=1, y=2, width=3, height=4, confidence=0.50" in text
+    assert "- x=5, y=6, width=7, height=8, confidence=0.60" in text
+
+
+def test_report_notes_absent_heads_and_persons(tmp_path):
+    text = build_markdown(_result(tmp_path))
+    assert "- (no heads detected)" in text
+    assert "- (no persons detected)" in text
+
+
+def test_scene_to_dict_includes_heads_and_persons(make_scene):
+    scene = make_scene()
+    scene.heads = [FaceBox(1, 2, 3, 4, 0.5)]
+    scene.persons = [FaceBox(5, 6, 7, 8, 0.6)]
+    payload = scene_to_dict(scene)
+    assert payload["heads"] == [
+        {"x": 1, "y": 2, "width": 3, "height": 4, "confidence": 0.5}
+    ]
+    assert payload["persons"] == [
+        {"x": 5, "y": 6, "width": 7, "height": 8, "confidence": 0.6}
+    ]

@@ -14,7 +14,8 @@ There are two entry points:
   of a run, using the knobs below via CLI flags (`--seam-carve`,
   `--seam-carve-energy-ratio`, `--seam-carve-max-shrink`,
   `--seam-carve-working-width`, `--seam-carve-detail-budget`,
-  `--seam-carve-jobs`, `--seam-carve-quality`).  It reuses step 8's faces, runs
+  `--seam-carve-jobs`, `--seam-carve-quality`).  It reuses step 8's detected
+  boxes (every enabled category), runs
   before boxes are drawn, and writes `seam_frames/<scene>.jpg` plus a
   `Seam Carve Shrink Percent:` line in `report.md`.  Frames are downscaled to a
   768px working width by default (~13x faster than 1080p native;
@@ -34,7 +35,8 @@ at the source resolution).  A gradient-magnitude energy map `E = |dI/dx| +
 |dI/dy|` is computed on the grayscale image.  Vertical
 seams are removed one at a time; the seam is whichever connected one-pixel-per-row
 path minimises **forward energy** (the energy *introduced* by the removal),
-plus a large extra cost inside the dilated face mask.  Every removal is logged as
+plus a large extra cost inside the dilated protected mask (face/head/person
+boxes).  Every removal is logged as
 a `SeamStep`, and the log is turned into four "guard" signals plus a composite.
 A guard crossing its threshold means "stop".  The recommended shrink is where the
 composite first trips, capped at `max_shrink`.  Carved images are sampled at
@@ -53,7 +55,7 @@ Let `E0` be the original working-resolution energy map, `mean(E0)` its mean, and
 | --- | --- | --- |
 | `energy` | `removed_norm(k) / energy_threshold` | Is the removed seam now as detailed as the image average? |
 | `forward` | `added_cum_norm(k) / (forward_knee_factor · forward_reference)` | Is removal introducing structure-bending energy? |
-| `detail` | `max(cum_detail(k)/detail_budget, cum_protected(k)/face_budget)` | Have we eaten too many important pixels? |
+| `detail` | `max(cum_detail(k)/detail_budget, cum_protected(k)/subject_budget)` | Have we eaten too many important pixels? |
 | `ssim` | `(1 − ssim(k)) / (1 − ssim_floor)` | Has global structure drifted from the original? |
 
 with:
@@ -64,8 +66,8 @@ with:
   average pixel; `1.0` means the seam is cutting through average content.
 * `cum_detail(k)` = cumulative removed pixels that were in the original top
   `(1 − detail_quantile)` of energy, divided by how many such pixels exist.
-* `cum_protected(k)` = cumulative removed pixels inside the face mask, divided by
-  the total face-mask area.
+* `cum_protected(k)` = cumulative removed pixels inside the protected mask
+  (face/head/person boxes), divided by the total mask area.
 * `ssim(k)` = structural similarity between the carved frame and the original
   uniformly scaled to the same size.
 * `badness(k) = max` of the normalised signals of the guards in `enabled_methods`;
@@ -123,8 +125,9 @@ where `early` is `removed_norm` at the end of the warm-up window (default
   pixels the guard may remove.  **Lower = stricter.**  This is what protects
   text-heavy credit frames and line art, where "energy" stays moderate but losing
   detail is very visible.  When this guard binds, the `E thr` column is irrelevant.
-* **`--face-budget`** (default `0.02`) — fraction of face-mask pixels that may be
-  removed.  Faces are energetically protected in the engine, so this is a safety
+* **`--subject-budget`** (default `0.02`) — fraction of protected-mask pixels (faces,
+  heads and persons share one mask) that may be removed.  Subjects are
+  energetically protected in the engine, so this is a safety
   net; it rarely binds, but it catches cases where protection is overrun.
 * **`--detail-quantile`** (config only, default `0.8`) — the energy quantile above
   which a pixel counts as "detail" (top 20%).  Lower the quantile to count more
@@ -174,11 +177,15 @@ pixels together; a rising curve means visible bending/ghosting.
 * **`--sample-step`** (default `0.1`) — carve a saved snapshot every this fraction
   of width (plus the exact recommendation).  Purely for inspection; it does not
   change the metric.
-* **`--no-face-protection`** — disable the energetic face mask (the metric still
-  counts face pixels removed, so you can see the difference).
+* **`--no-subject-protection`** — disable the energetic protected mask (the metric
+  still counts protected pixels removed, so you can see the difference).
 * **`--keep-face-boxes`** — do not strip the thin green face boxes the pipeline
   draws onto frames (by default they are inpainted out, since they are annotation,
   not content; genuinely green scenes are left alone).
+  **Caveat:** only the *green* (face) overlay is stripped. If you run the
+  experiment directly on pipeline output with `--boxes` on, the blue head and red
+  person boxes are **not** removed and will be treated as content; export clean
+  frames (e.g. `--no-boxes`) before running the experiment.
 * **`--clean`** — delete previously generated `carved/contacts/plots/thumbs/overview`
   and summary files before running.  Without it, per-frame outputs are still
   overwritten and stale `_recNN` files for re-processed frames are removed.
@@ -192,8 +199,9 @@ pixels together; a rising curve means visible bending/ghosting.
 * `smoothing_window` (`0.02`) — moving-average window for `removed_norm`, as a
   fraction of width.  Larger = smoother signals; the stop ratio moves slightly.
 * `ssim_stride` (`4`) — compute SSIM every N seams and interpolate.
-* `protect_faces`, `face_energy_factor` (`50.0`), `face_dilation` (`0.01`) —
-  strength/size of the energy penalty inside the face mask.
+* `protect_subjects`, `subject_energy_factor` (`50.0`), `subject_dilation`
+  (`0.01`) — strength/size of the energy penalty inside the protected mask
+  (faces, heads and persons alike).
 * `strip_overlays` (`true`) — green-box removal.
 * `panel_width` (`320`), `thumb_width` (`240`), `overview_width` (`300`),
   `jpeg_quality` (`88`) — report image sizes; cosmetic.  Thumbnails always keep
@@ -211,7 +219,7 @@ enabled, so you can compare candidates.
 | Column | Meaning |
 | --- | --- |
 | `name` | Frame name (e.g. `scene_0120`), i.e. the source still. |
-| `faces` | Anime faces detected in the frame.  Drives the energetic face mask and the `face` budget. `0` means none. |
+| `faces` | Subjects detected in the frame (faces, heads and persons all merge into one protective mask).  Drives the energetic mask and the `subject` budget. `0` means none. |
 | `working_size` | `[width, height]` the frame was analysed/carved at (source size when `working_width` is `None`, otherwise after scaling to `working_width`). |
 | `base_energy` | Mean gradient energy of the working image (arbitrary units); the denominator for `energy`. |
 | `energy_early` | The frame's own easy-seam energy at the end of the warm-up window, in units of `base_energy`.  High = detailed everywhere.  Feeds the adaptive margin. |
@@ -220,7 +228,7 @@ enabled, so you can compare candidates.
 | `recommended_triggered` | `false` when the guard never tripped and the fraction is just the cap/end. |
 | `energy_ratio` | Stop ratio where the **energy** guard trips: as low-energy seams run out, removed-seam energy reaches `E thr`. |
 | `forward_ratio` | Stop ratio where the **forward** guard trips: introduced (structure-bending) energy reaches `forward_knee_factor ×` its warm-up baseline.  Informational unless `forward` is enabled. |
-| `detail_ratio` | Stop ratio where the **detail** guard trips: cumulative removed high-gradient pixels reach `detail_budget`, or removed face pixels reach `face_budget`. |
+| `detail_ratio` | Stop ratio where the **detail** guard trips: cumulative removed high-gradient pixels reach `detail_budget`, or removed protected pixels reach `subject_budget`. |
 | `ssim_ratio` | Stop ratio where the **structural** guard trips: SSIM to the uniformly rescaled original falls to `ssim_floor`.  Informational unless `ssim` is enabled. |
 | `composite_ratio` (`COMP`) | The recommended stop: the first *enabled* guard to trip = the minimum of the enabled guard ratios (`energy` and `detail` by default).  It is the number to act on. |
 
@@ -260,7 +268,7 @@ enable more guards and the minimum naturally changes.
   `--energy-baseline-multiple`.
 * **"Text/credit frames must not be touched."** Lower `--detail-budget`
   (`0.03–0.05`) and keep `energy` enabled.
-* **"Faces get squished."** Lower `--max-shrink`, lower `--energy-ratio`, or add
-  `ssim` / lower `--ssim-floor`.
+* **"Faces/heads/persons get squished."** Lower `--max-shrink`, lower
+  `--energy-ratio`, or add `ssim` / lower `--ssim-floor`.
 * **"I want one guard only."** `--primary-method energy --enabled energy` (etc.),
   then compare against `composite`.
