@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import cv2
 import numpy as np
+import pytest
 
+from anime2manga import seam_carving as sc
 from anime2manga.models import FaceBox
 from anime2manga.seam_carving import (
     SeamCarvingConfig,
@@ -93,3 +95,102 @@ def test_snapshots_and_seams_can_be_disabled():
     assert set(result.snapshots) == {0.0, 0.125}
     assert result.snapshots[0.125].shape[1] < 80
     assert result.seams == []
+
+
+def test_python_fallback_used_when_native_absent(monkeypatch):
+    # ``carve_width`` must keep working when the compiled engine is missing.
+    monkeypatch.setattr(sc, "_NATIVE_CARVE", None)
+    result = carve_width(_image(), 40)
+    assert result.image.shape == (60, 40, 3)
+    assert len(result.steps) == 40
+
+
+@pytest.mark.skipif(not sc.HAVE_NATIVE, reason="native backend not built")
+@pytest.mark.parametrize("seed", [0, 1, 2])
+def test_native_matches_python(seed):
+    image = _image(seed=seed)
+    native = carve_width(image, 40)
+    python = sc._carve_width_python(image, 40)
+    assert np.array_equal(native.image, python.image)
+    # base_energy/energy_sum0 are float32 reductions in Python and double sums
+    # in C++, so they only agree to float rounding (they differ on large frames).
+    assert native.base_energy == pytest.approx(python.base_energy, rel=1e-6)
+    assert native.energy_sum0 == pytest.approx(python.energy_sum0, rel=1e-6)
+    assert native.detail_total == python.detail_total
+    assert native.protected_total == python.protected_total
+    assert len(native.seams) == len(python.seams)
+    for a, b in zip(native.seams, python.seams, strict=True):
+        assert np.array_equal(a, b)
+
+
+@pytest.mark.skipif(not sc.HAVE_NATIVE, reason="native backend not built")
+@pytest.mark.parametrize("seed", range(5))
+def test_native_matches_python_quantile_boundary(seed):
+    # 24x49 => N - 1 == 1175 and 0.8 * 1175 == 940 exactly, so the detail
+    # threshold lands on an order statistic.  Passing the quantile as a float32
+    # (0.8000000119...) shifted it just past the boundary and dropped tied
+    # pixels from detail_total.
+    rng = np.random.default_rng(seed)
+    image = rng.integers(0, 256, (24, 49, 3), dtype=np.uint8)
+    native = carve_width(image, 30)
+    python = sc._carve_width_python(image, 30)
+    assert native.detail_total == python.detail_total
+    assert np.array_equal(native.image, python.image)
+
+
+@pytest.mark.skipif(not sc.HAVE_NATIVE, reason="native backend not built")
+def test_native_matches_python_dilation_rounding_boundary():
+    # 0.1 * min(25, 37) == 2.5: Python round() and the C++ must both round
+    # half-to-even (radius 2), or the face mask and chosen seams diverge.
+    rng = np.random.default_rng(3)
+    image = rng.integers(0, 256, (25, 37, 3), dtype=np.uint8)
+    face = [FaceBox(x=8, y=4, width=9, height=9)]
+    cfg = SeamCarvingConfig(face_dilation=0.1)
+    native = carve_width(image, 25, faces=face, config=cfg)
+    python = sc._carve_width_python(image, 25, faces=face, config=cfg)
+    assert native.protected_total == python.protected_total
+    assert np.array_equal(native.image, python.image)
+
+
+@pytest.mark.skipif(not sc.HAVE_NATIVE, reason="native backend not built")
+def test_native_matches_python_single_row_image():
+    rng = np.random.default_rng(5)
+    image = rng.integers(0, 256, (1, 20, 3), dtype=np.uint8)
+    native = carve_width(image, 12)
+    python = sc._carve_width_python(image, 12)
+    assert native.image.shape == (1, 12, 3)
+    assert np.array_equal(native.image, python.image)
+
+
+@pytest.mark.skipif(not sc.HAVE_NATIVE, reason="native backend not built")
+def test_native_callback_exception_propagates():
+    def boom(_k, _image, _step):
+        raise ValueError("callback boom")
+
+    with pytest.raises(ValueError, match="callback boom"):
+        carve_width(_image(), 40, on_seam=boom)
+
+
+@pytest.mark.skipif(not sc.HAVE_NATIVE, reason="native backend not built")
+def test_native_matches_python_with_faces_snapshots_and_callback():
+    rng = np.random.default_rng(7)
+    image = rng.integers(0, 255, (80, 120, 3), dtype=np.uint8)
+    face = [FaceBox(x=70, y=25, width=30, height=30)]
+    seen: list[int] = []
+    native = carve_width(
+        image,
+        60,
+        faces=face,
+        config=SeamCarvingConfig(record_seams=True),
+        snapshot_ratios=(0.0, 0.25),
+        on_seam=lambda k, _image, _step: seen.append(k),
+    )
+    python = sc._carve_width_python(
+        image, 60, faces=face, config=SeamCarvingConfig(record_seams=True),
+        snapshot_ratios=(0.0, 0.25),
+    )
+    assert np.array_equal(native.image, python.image)
+    assert set(native.snapshots) == set(python.snapshots)
+    for ratio in native.snapshots:
+        assert np.array_equal(native.snapshots[ratio], python.snapshots[ratio])
+    assert seen == list(range(1, len(native.steps) + 1))

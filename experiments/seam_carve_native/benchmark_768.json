@@ -1,0 +1,124 @@
+{
+  "summary": {
+    "frames": 12,
+    "input_width": 768,
+    "seams_total": 2772,
+    "python_total_s": 36.302246158000344,
+    "native_total_s": 5.281335760006186,
+    "speedup_overall": 6.8736864701739435,
+    "all_exact": true,
+    "shrink": 0.7,
+    "cv2_version": "5.0.0",
+    "numpy_version": "2.5.3"
+  },
+  "rows": [
+    {
+      "frame": "scene_0001.jpg",
+      "width": 768,
+      "seams": 231,
+      "python_s": 3.0460201159985445,
+      "native_s": 0.43888657700154,
+      "speedup": 6.940335557329784,
+      "exact": true
+    },
+    {
+      "frame": "scene_0022.jpg",
+      "width": 768,
+      "seams": 231,
+      "python_s": 3.056881273001636,
+      "native_s": 0.44016111500241095,
+      "speedup": 6.944914416133493,
+      "exact": true
+    },
+    {
+      "frame": "scene_0046.jpg",
+      "width": 768,
+      "seams": 231,
+      "python_s": 3.0532711970008677,
+      "native_s": 0.43882429500081344,
+      "speedup": 6.957844476216176,
+      "exact": true
+    },
+    {
+      "frame": "scene_0069.jpg",
+      "width": 768,
+      "seams": 231,
+      "python_s": 3.0008229069972003,
+      "native_s": 0.4359336199995596,
+      "speedup": 6.883669369204036,
+      "exact": true
+    },
+    {
+      "frame": "scene_0094.jpg",
+      "width": 768,
+      "seams": 231,
+      "python_s": 3.0281288549995224,
+      "native_s": 0.43830963900109055,
+      "speedup": 6.908652207377051,
+      "exact": true
+    },
+    {
+      "frame": "scene_0115.jpg",
+      "width": 768,
+      "seams": 231,
+      "python_s": 3.034285826000996,
+      "native_s": 0.4533040130008885,
+      "speedup": 6.693710487833358,
+      "exact": true
+    },
+    {
+      "frame": "scene_0137.jpg",
+      "width": 768,
+      "seams": 231,
+      "python_s": 3.0193010049988516,
+      "native_s": 0.4344772809999995,
+      "speedup": 6.949272463797376,
+      "exact": true
+    },
+    {
+      "frame": "scene_0160.jpg",
+      "width": 768,
+      "seams": 231,
+      "python_s": 2.990532274998259,
+      "native_s": 0.43994124999881024,
+      "speedup": 6.797571891715874,
+      "exact": true
+    },
+    {
+      "frame": "scene_0184.jpg",
+      "width": 768,
+      "seams": 231,
+      "python_s": 3.0134871549998934,
+      "native_s": 0.43600773900107015,
+      "speedup": 6.911545106754394,
+      "exact": true
+    },
+    {
+      "frame": "scene_0207.jpg",
+      "width": 768,
+      "seams": 231,
+      "python_s": 3.0139948210016883,
+      "native_s": 0.43405007099863724,
+      "speedup": 6.943887404665696,
+      "exact": true
+    },
+    {
+      "frame": "scene_0233.jpg",
+      "width": 768,
+      "seams": 231,
+      "python_s": 3.03452295399984,
+      "native_s": 0.442005639000854,
+      "speedup": 6.865348959934823,
+      "exact": true
+    },
+    {
+      "frame": "scene_0257.jpg",
+      "width": 768,
+      "seams": 231,
+      "python_s": 3.0109977740030445,
+      "native_s": 0.4494345210005122,
+      "speedup": 6.699524921450378,
+      "exact": true
+    }
+  ]
+}

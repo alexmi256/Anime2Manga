@@ -1,7 +1,10 @@
 # Seam-carving retarget metrics — parameter guide
 
 This documents the seam-carving retarget engine and metrics
-(`src/anime2manga/seam_carving.py`, `src/anime2manga/retarget.py`).  The goal is
+(`src/anime2manga/seam_carving.py`, `src/anime2manga/retarget.py`).  The engine
+also has a compiled C++ backend (`src/anime2manga/_seamcarve.cpp`, built into
+`anime2manga._seamcarve` by `just install`) that `carve_width` uses when
+available; it is behaviourally identical to the pure-Python loop.  The goal is
 to answer one question per frame: **how far can this frame be seam-carved
 before it looks subjectively bad?**
 

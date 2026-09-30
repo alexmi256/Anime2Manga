@@ -45,13 +45,17 @@ run:
 retarget frames_dir="output/frames" out="output/retarget" jobs="8":
     PYTHONPATH=src {{python}} scripts/retarget_frames.py {{frames_dir}} -o {{out}} -j {{jobs}}
 
+# Benchmark the compiled seam-carving backend against the pure-Python one.
+bench frames_dir="output/frames" frames="12":
+    {{python}} experiments/seam_carve_native/benchmark.py {{frames_dir}} --frames {{frames}}
+
 # Remove generated output so a fresh `just run` leaves no stale files behind.
 clean:
     rm -rf {{output_dir}}
 
-# Build source and wheel distributions.
+# Build source and wheel distributions (portable: no -march=native).
 build:
-    {{python}} -m build
+    ANIME2MANGA_PORTABLE_BUILD=1 {{python}} -m build
 
 # Publish to PyPI.
 publish:
