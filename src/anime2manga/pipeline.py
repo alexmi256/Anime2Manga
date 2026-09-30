@@ -101,10 +101,14 @@ class PipelineConfig:
     #: drawn, so the face model is never run twice and the carve sees clean
     #: pixels.  ``retarget.energy_ratio <= 0`` also disables it.
     seam_carve: bool = True
-    #: Retarget metric settings.  Defaults are tuned for the report (energy
-    #: ratio 0.25, no snapshots/SSIM since only the composite ratio is needed).
+    #: Retarget metric settings.  Defaults are tuned for the report (768px
+    #: working width, energy ratio 0.25, no snapshots/SSIM since only the
+    #: composite ratio is needed).  The 768px downscale is ~13x faster than
+    #: carving at source resolution; set ``working_width=None`` for
+    #: native-resolution output.
     retarget: RetargetConfig = field(
         default_factory=lambda: RetargetConfig(
+            working_width=768,
             energy_ratio=0.25,
             strip_overlays=False,
             sample_step=1.0,
@@ -688,6 +692,9 @@ class Pipeline:
         Panoramic scenes keep their stitched canvas untouched; every other scene
         with a chosen frame is carved down from the frame's own detected faces.
         The recommendation is the composite limit (``energy`` + ``detail``).
+        The carve runs at the config's working width (768px by default, ~13x
+        faster than native; pass ``working_width=None`` /
+        ``--seam-carve-working-width 0`` for full-resolution output).
         """
         cfg = self.config
         if not cfg.seam_carve or cfg.retarget.energy_ratio <= 0:

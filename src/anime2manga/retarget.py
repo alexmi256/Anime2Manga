@@ -52,9 +52,11 @@ class RetargetConfig:
 
     #: Hard cap on the fraction of width removed (the brief says half).
     max_shrink: float = 0.5
-    #: Working resolution: the image is scaled to this width before carving.
-    #: High enough to judge quality, low enough to carve in a couple of seconds.
-    working_width: int = 768
+    #: Working resolution: the image is downscaled to this width before carving.
+    #: ``768`` is fast (~13x quicker than native on 1080p) and is the default
+    #: for both the pipeline and the experiment.  ``None`` (or any non-positive
+    #: value) carves the source frame at its native resolution instead.
+    working_width: int | None = 768
 
     # --- single-signal thresholds ----------------------------------------
     #: ``energy``: stop when removed-seam energy reaches this multiple of the
@@ -426,6 +428,8 @@ def retarget_image(
     pipeline reuses step 8's detection so the model never runs twice); otherwise
     the anime face model runs on the image.  The returned analysis carries a
     placeholder ``path`` - use :func:`analyze_frame` for the disk entry point.
+    Set ``config.working_width=None`` to carve at the source resolution instead
+    of downscaling first.
     """
     cfg = config or RetargetConfig()
     original = image
@@ -436,10 +440,19 @@ def retarget_image(
     if faces is None:
         faces = detect_faces_in_image(original, config=face_config)
 
-    scale = min(1.0, cfg.working_width / width0)
+    if cfg.working_width is None or cfg.working_width <= 0:
+        scale = 1.0
+    else:
+        scale = min(1.0, cfg.working_width / width0)
     work_w = max(1, round(width0 * scale))
     work_h = max(1, round(height0 * scale))
-    working = cv2.resize(original, (work_w, work_h), interpolation=cv2.INTER_AREA)
+    if scale < 1.0:
+        working = cv2.resize(original, (work_w, work_h), interpolation=cv2.INTER_AREA)
+    else:
+        # No downscale requested (``working_width=None`` or a width at least as
+        # large as the source): carve the original pixels untouched.
+        working = original
+        work_w, work_h = width0, height0
     work_faces = _scale_faces(faces, scale)
 
     target = max(1, round(work_w * (1.0 - cfg.max_shrink)))

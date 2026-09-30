@@ -41,6 +41,15 @@ def test_parser_defaults():
     assert config.seam_carve_quality == 92
 
 
+def test_seam_carve_working_width_zero_means_native():
+    """``0`` opts out of downscaling; the engine then carves at source size."""
+    parser = cli.build_parser()
+    native = cli.config_from_args(
+        parser.parse_args(["video.mkv", "--seam-carve-working-width", "0"])
+    )
+    assert native.retarget.working_width is None
+
+
 def test_parser_overrides():
     args = cli.build_parser().parse_args(
         [

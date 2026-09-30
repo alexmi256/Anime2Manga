@@ -289,6 +289,13 @@ def _natural_key(name: str) -> list[tuple[int, object]]:
     return [(0, int(part)) if part.isdigit() else (1, part) for part in re.split(r"(\d+)", name)]
 
 
+def _working_width_label(config: RetargetConfig) -> str:
+    """Human label for the carve resolution (``None``/``<=0`` means native)."""
+    if config.working_width is None or config.working_width <= 0:
+        return "original (no downscale)"
+    return f"{config.working_width}px"
+
+
 def render_markdown(records: list[dict[str, Any]], config: RetargetConfig) -> str:
     """A concise human-readable summary of the run."""
     lines = [
@@ -296,7 +303,7 @@ def render_markdown(records: list[dict[str, Any]], config: RetargetConfig) -> st
         "",
         f"- Frames analysed: **{len(records)}**",
         f"- Max shrink cap: **{_fmt(config.max_shrink)}**",
-        f"- Working width: **{config.working_width}px**",
+        f"- Working width: **{_working_width_label(config)}**",
         f"- Enabled guards: **{', '.join(config.enabled_methods)}**",
         f"- Thresholds: energy ratio {config.energy_ratio:g} "
         f"(adaptive +{config.energy_baseline_multiple:g} above early {config.energy_reference:g}), "
@@ -410,7 +417,7 @@ def render_html(
         f"<style>{css}</style></head><body>"
         "<h1>Seam-carving retarget report</h1>"
         f"<p>{len(records)} frames &middot; cap {_fmt(config.max_shrink)} &middot; "
-        f"working width {config.working_width}px &middot; guards "
+        f"working width {_working_width_label(config)} &middot; guards "
         f"{', '.join(config.enabled_methods)} &middot; energy {config.energy_ratio:g} "
         f"(adaptive +{config.energy_baseline_multiple:g} above early {config.energy_reference:g}) "
         f"&middot; detail {_fmt(config.detail_budget)} &middot; face {_fmt(config.face_budget)}</p>"
