@@ -41,6 +41,10 @@ check: lint typecheck test
 run:
     PYTHONPATH=src {{python}} -m anime2manga input.mkv -o {{output_dir}}
 
+# Experiment: seam-carve frames and report how far each can shrink.
+retarget frames_dir="output/frames" out="output/retarget" jobs="8":
+    PYTHONPATH=src {{python}} scripts/retarget_frames.py {{frames_dir}} -o {{out}} -j {{jobs}}
+
 # Remove generated output so a fresh `just run` leaves no stale files behind.
 clean:
     rm -rf {{output_dir}}

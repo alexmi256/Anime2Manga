@@ -21,6 +21,7 @@ from anime2manga.models import (
     TimeRange,
 )
 from anime2manga.pipeline import Pipeline, PipelineConfig, run_pipeline
+from anime2manga.retarget import RetargetConfig
 from anime2manga.text_layout import plan_text_placement
 from anime2manga.timeline import coverage, validate_scenes
 from anime2manga.translation import require_translation
@@ -360,9 +361,7 @@ def _audio_media(make_media, channels: int = 2):
     )
 
 
-def test_step7_audio_attaches_focus_and_balance(
-    tmp_path, make_media, make_scene, monkeypatch
-):
+def test_step7_audio_attaches_focus_and_balance(tmp_path, make_media, make_scene, monkeypatch):
     from anime2manga.audio import AudioFocus
 
     pipeline = _face_pipeline(tmp_path)
@@ -380,9 +379,7 @@ def test_step7_audio_attaches_focus_and_balance(
     assert pipeline.scenes[0].audio_balance_db == 9.0
 
 
-def test_step7_audio_disabled_leaves_scenes_centered(
-    tmp_path, make_media, make_scene, monkeypatch
-):
+def test_step7_audio_disabled_leaves_scenes_centered(tmp_path, make_media, make_scene, monkeypatch):
     pipeline = _face_pipeline(tmp_path, detect_audio=False)
     pipeline.media = _audio_media(make_media)
     pipeline.scenes = [make_scene()]
@@ -397,9 +394,7 @@ def test_step7_audio_disabled_leaves_scenes_centered(
     assert pipeline.scenes[0].audio_focus == "center"
 
 
-def test_step7_audio_skips_mono_source(
-    tmp_path, make_media, make_scene, monkeypatch
-):
+def test_step7_audio_skips_mono_source(tmp_path, make_media, make_scene, monkeypatch):
     pipeline = _face_pipeline(tmp_path)
     pipeline.media = _audio_media(make_media, channels=1)
     pipeline.scenes = [make_scene()]
@@ -412,3 +407,189 @@ def test_step7_audio_skips_mono_source(
     pipeline._step7_audio()
 
     assert pipeline.scenes[0].audio_focus == "center"
+
+
+# --- seam carving integration (step 8b) -----------------------------------
+
+
+def _gradient_frame(path, width=160, height=90) -> str:
+    ramp = np.tile(np.linspace(0, 255, width, dtype=np.uint8), (height, 1))
+    image = cv2.cvtColor(ramp, cv2.COLOR_GRAY2BGR)
+    cv2.rectangle(image, (100, 20), (150, 70), (255, 255, 255), -1)
+    cv2.imwrite(str(path), image)
+    return str(path)
+
+
+def test_step8b_writes_seam_frame_and_shrink(tmp_path, monkeypatch):
+    _gradient_frame(tmp_path / "frame.png")
+    scene = Scene(index=1, start=0.0, end=1.0, fps=24.0)
+    scene.frame_path = tmp_path / "frame.png"
+    pipeline = _face_pipeline(tmp_path)
+    pipeline.scenes = [scene]
+    monkeypatch.setattr("anime2manga.faces.detect_faces", lambda path, config=None: [])
+
+    pipeline._step8_faces()
+
+    assert scene.seam_carved_path is not None
+    assert scene.seam_carved_path.exists()
+    assert scene.seam_carve_shrink is not None
+    assert 0.0 < scene.seam_carve_shrink <= 0.5
+    assert scene.seam_carve_size is not None
+    assert scene.seam_carve_size[0] <= 160
+
+
+def test_seam_carve_disabled_when_energy_ratio_zero(tmp_path, monkeypatch):
+    _gradient_frame(tmp_path / "frame.png")
+    scene = Scene(index=1, start=0.0, end=1.0, fps=24.0)
+    scene.frame_path = tmp_path / "frame.png"
+    pipeline = _face_pipeline(
+        tmp_path,
+        seam_carve=True,
+        retarget=RetargetConfig(energy_ratio=0.0, strip_overlays=False),
+    )
+    pipeline.scenes = [scene]
+    monkeypatch.setattr("anime2manga.faces.detect_faces", lambda path, config=None: [])
+
+    pipeline._step8_faces()
+
+    assert scene.seam_carved_path is None
+    assert not (tmp_path / "out" / "seam_frames").exists()
+
+
+def test_seam_carve_skips_panorama(tmp_path, monkeypatch):
+    _gradient_frame(tmp_path / "pano.png")
+    scene = Scene(index=1, start=0.0, end=1.0, fps=24.0)
+    scene.is_panoramic = True
+    scene.frame_path = tmp_path / "pano.png"
+    pipeline = _face_pipeline(tmp_path)
+    pipeline.scenes = [scene]
+    monkeypatch.setattr("anime2manga.faces.detect_faces", lambda path, config=None: [])
+
+    pipeline._step8_faces()
+
+    assert scene.seam_carved_path is None
+
+
+def test_seam_carve_runs_before_face_boxes_are_drawn(tmp_path, monkeypatch):
+    """The carver must see clean pixels: carve first, annotate second."""
+    import types
+
+    frame = tmp_path / "frame.png"
+    cv2.imwrite(str(frame), np.zeros((60, 90, 3), np.uint8))
+    scene = Scene(index=1, start=0.0, end=1.0, fps=24.0)
+    scene.frame_path = frame
+    pipeline = _face_pipeline(tmp_path)
+    pipeline.scenes = [scene]
+
+    order: list[str] = []
+
+    def fake_retarget(image, **kwargs):
+        order.append("carve")
+        assert int(image.sum()) == 0  # clean frame, no box pixels yet
+        return types.SimpleNamespace(
+            recommended_image=image,
+            recommended=types.SimpleNamespace(ratio=0.2),
+        )
+
+    monkeypatch.setattr(
+        "anime2manga.faces.detect_faces", lambda path, config=None: [FaceBox(1, 2, 3, 4)]
+    )
+    monkeypatch.setattr("anime2manga.pipeline.retarget_image", fake_retarget)
+
+    def fake_annotate(path, boxes, **kwargs):
+        order.append("annotate")
+
+    monkeypatch.setattr("anime2manga.faces.annotate_faces", fake_annotate)
+
+    pipeline._step8_faces()
+
+    assert order == ["carve", "annotate"]
+    assert scene.seam_carve_shrink == 0.2
+
+
+def test_carve_frame_writes_and_reports():
+    import tempfile
+    from pathlib import Path
+
+    from anime2manga.pipeline import _carve_frame
+
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        src = root / "frame.png"
+        _gradient_frame(src)
+        out = root / "carved.jpg"
+        result = _carve_frame(
+            (7, str(src), [], str(out), RetargetConfig(strip_overlays=False), 90)
+        )
+        assert result is not None
+        assert result["index"] == 7
+        assert out.exists()
+        assert 0.0 < result["shrink"] <= 0.5
+        assert result["size"][0] <= 160
+
+
+def test_step8b_parallel_branch_uses_spawn_context(tmp_path, monkeypatch):
+    """The CLI default (jobs>1) must use an explicit spawn context."""
+    import anime2manga.pipeline as pipeline_module
+
+    frames = []
+    for index in (1, 2):
+        path = tmp_path / f"frame{index}.png"
+        _gradient_frame(path)
+        scene = Scene(index=index, start=float(index), end=float(index) + 1, fps=24.0)
+        scene.frame_path = path
+        frames.append(scene)
+
+    captured: dict = {}
+
+    class _FakePool:
+        def __init__(self, max_workers=None, mp_context=None):
+            captured["context"] = mp_context
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def map(self, fn, tasks):
+            return [fn(task) for task in tasks]
+
+    monkeypatch.setattr(pipeline_module, "ProcessPoolExecutor", _FakePool)
+    pipeline = _face_pipeline(tmp_path, seam_carve_jobs=2)
+    pipeline.scenes = frames
+
+    pipeline._step8b_seam_carve()
+
+    assert captured["context"] is not None
+    assert captured["context"].get_start_method() == "spawn"
+    assert all(scene.seam_carved_path is not None for scene in frames)
+
+
+def test_seam_carve_panorama_skipped_and_ratio_zero_together(tmp_path, monkeypatch):
+    """One pipeline: a regular frame is carved, its panorama neighbour is not;
+    an energy ratio of 0 then disables carving for both."""
+    regular = Scene(index=1, start=0.0, end=1.0, fps=24.0)
+    regular.frame_path = tmp_path / "regular.png"
+    _gradient_frame(regular.frame_path)
+    panorama = Scene(index=2, start=1.0, end=2.0, fps=24.0)
+    panorama.is_panoramic = True
+    panorama.frame_path = tmp_path / "pano.png"
+    _gradient_frame(panorama.frame_path, width=200)
+
+    monkeypatch.setattr("anime2manga.faces.detect_faces", lambda path, config=None: [])
+
+    enabled = _face_pipeline(tmp_path)
+    enabled.scenes = [regular, panorama]
+    enabled._step8_faces()
+    assert regular.seam_carved_path is not None
+    assert panorama.seam_carved_path is None
+
+    regular.seam_carved_path = None
+    disabled = _face_pipeline(
+        tmp_path, retarget=RetargetConfig(energy_ratio=0.0, strip_overlays=False)
+    )
+    disabled.scenes = [regular, panorama]
+    disabled._step8_faces()
+    assert regular.seam_carved_path is None
+    assert panorama.seam_carved_path is None

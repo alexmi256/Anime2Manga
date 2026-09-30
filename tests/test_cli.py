@@ -33,6 +33,12 @@ def test_parser_defaults():
     assert config.audio.silence_floor_db == -60.0
     assert config.audio.band_low_hz == 300.0
     assert config.audio.band_high_hz == 3400.0
+    # Seam carving is on by default with the tuned energy ratio.
+    assert config.seam_carve is True
+    assert config.retarget.energy_ratio == 0.25
+    assert config.retarget.max_shrink == 0.5
+    assert config.retarget.working_width == 768
+    assert config.seam_carve_quality == 92
 
 
 def test_parser_overrides():
@@ -140,3 +146,39 @@ def test_main_success_writes_report(monkeypatch, tmp_path):
 def test_main_invalid_args_exits(capsys):
     with pytest.raises(SystemExit):
         cli.main([])
+
+
+def test_seam_carve_override_and_disable():
+    parser = cli.build_parser()
+    tuned = cli.config_from_args(
+        parser.parse_args(
+            [
+                "video.mkv",
+                "--seam-carve-energy-ratio",
+                "0.15",
+                "--seam-carve-max-shrink",
+                "0.4",
+                "--seam-carve-working-width",
+                "512",
+                "--seam-carve-detail-budget",
+                "0.07",
+                "--seam-carve-jobs",
+                "3",
+                "--seam-carve-quality",
+                "80",
+            ]
+        )
+    )
+    assert tuned.seam_carve is True
+    assert tuned.retarget.energy_ratio == 0.15
+    assert tuned.retarget.max_shrink == 0.4
+    assert tuned.retarget.working_width == 512
+    assert tuned.retarget.detail_budget == 0.07
+    assert tuned.seam_carve_jobs == 3
+    assert tuned.seam_carve_quality == 80
+
+    # A zero energy ratio disables carving, as does --no-seam-carve.
+    zero = cli.config_from_args(parser.parse_args(["video.mkv", "--seam-carve-energy-ratio", "0"]))
+    assert zero.seam_carve is False
+    off = cli.config_from_args(parser.parse_args(["video.mkv", "--no-seam-carve"]))
+    assert off.seam_carve is False

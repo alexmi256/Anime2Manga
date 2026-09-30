@@ -15,8 +15,9 @@ Order of operations
    clearest frame near each scene's subtitle timing (or use the panorama).
 7. Measure the left/right audio balance of each scene so text placement can
    favour the side the dialogue comes from.
-8. Detect faces on each chosen frame; optionally draw their bounding boxes onto
-   the saved image.
+8. Detect faces on each chosen frame, seam-carve a copy of every regular
+   frame (reusing those boxes, before any boxes are drawn), then optionally
+   draw the face bounding boxes onto the saved image.
 
 Steps 9-10 (cropping, text placement) are stubbed in their own modules and are
 intentionally *not* invoked yet.
@@ -24,6 +25,8 @@ intentionally *not* invoked yet.
 
 from __future__ import annotations
 
+import multiprocessing
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -46,6 +49,7 @@ from .models import (
     SubtitleLine,
 )
 from .panorama import PanConfig, detect_pan, pan_continues, stitch
+from .retarget import RetargetConfig, retarget_image
 from .scene_detect import (
     DEFAULT_SCDET_THRESHOLD,
     DEFAULT_SELECT_THRESHOLD,
@@ -92,8 +96,47 @@ class PipelineConfig:
     #: Draw detected face bounding boxes onto the saved chosen frames.
     draw_face_boxes: bool = True
     face: FaceDetectionConfig = field(default_factory=FaceDetectionConfig)
+    #: Produce a seam-carved version of every regular (non-panoramic) frame.
+    #: The carver reuses step 8's face boxes and runs before the boxes are
+    #: drawn, so the face model is never run twice and the carve sees clean
+    #: pixels.  ``retarget.energy_ratio <= 0`` also disables it.
+    seam_carve: bool = True
+    #: Retarget metric settings.  Defaults are tuned for the report (energy
+    #: ratio 0.25, no snapshots/SSIM since only the composite ratio is needed).
+    retarget: RetargetConfig = field(
+        default_factory=lambda: RetargetConfig(
+            energy_ratio=0.25,
+            strip_overlays=False,
+            sample_step=1.0,
+            ssim_stride=0,
+        )
+    )
+    #: Worker processes for seam carving (1 = sequential; the CLI defaults higher).
+    seam_carve_jobs: int = 1
+    #: JPEG quality for seam-carved frames.
+    seam_carve_quality: int = 92
     keep_analysis: bool = False
     verbose: bool = True
+
+
+def _carve_frame(
+    task: tuple[int, str, list, str, RetargetConfig, int],
+) -> dict | None:
+    """Seam-carve one frame in a worker process (module-level for pickling)."""
+    index, frame_path, face_list, out_path, config, quality = task
+    image = cv2.imread(frame_path, cv2.IMREAD_COLOR)
+    if image is None:
+        return None
+    analysis = retarget_image(image, faces=list(face_list), config=config)
+    carved = analysis.recommended_image if analysis.recommended_image is not None else image
+    cv2.imwrite(out_path, carved, [int(cv2.IMWRITE_JPEG_QUALITY), quality])
+    ratio = analysis.recommended.ratio if analysis.recommended else 0.0
+    return {
+        "index": index,
+        "path": out_path,
+        "shrink": float(ratio),
+        "size": (int(carved.shape[1]), int(carved.shape[0])),
+    }
 
 
 class Pipeline:
@@ -615,10 +658,11 @@ class Pipeline:
             shutil.rmtree(analysis_dir, ignore_errors=True)
 
     def _step8_faces(self) -> None:
-        """Detect faces on each chosen frame and optionally draw their boxes.
+        """Detect faces, seam-carve regular frames, then optionally draw boxes.
 
-        Detection always runs so the report can list the boxes; the CLI flag
-        only controls whether the boxes are also painted onto the saved image.
+        Detection runs first so the carver can reuse the boxes, and the boxes
+        are painted last so the carve works from clean pixels and the detector
+        is never run twice.
         """
         detected = 0
         for scene in self.scenes:
@@ -628,10 +672,78 @@ class Pipeline:
             if not scene.faces:
                 continue
             detected += len(scene.faces)
-            if self.config.draw_face_boxes:
-                faces.annotate_faces(scene.frame_path, scene.faces)
             self.debug(f"scene {scene.index}: {len(scene.faces)} face(s) detected")
         self.log(f"faces detected: {detected}")
+
+        self._step8b_seam_carve()
+
+        if self.config.draw_face_boxes:
+            for scene in self.scenes:
+                if scene.frame_path is not None and scene.faces:
+                    faces.annotate_faces(scene.frame_path, scene.faces)
+
+    def _step8b_seam_carve(self) -> None:
+        """Write a seam-carved copy of each regular frame and record its shrink.
+
+        Panoramic scenes keep their stitched canvas untouched; every other scene
+        with a chosen frame is carved down from the frame's own detected faces.
+        The recommendation is the composite limit (``energy`` + ``detail``).
+        """
+        cfg = self.config
+        if not cfg.seam_carve or cfg.retarget.energy_ratio <= 0:
+            return
+        seam_dir = self.output_dir / "seam_frames"
+        tasks: list[tuple] = []
+        for scene in self.scenes:
+            if scene.is_panoramic or scene.frame_path is None:
+                continue
+            out_path = seam_dir / f"scene_{scene.index:04d}.jpg"
+            tasks.append(
+                (
+                    scene.index,
+                    str(scene.frame_path),
+                    list(scene.faces),
+                    str(out_path),
+                    cfg.retarget,
+                    cfg.seam_carve_quality,
+                )
+            )
+        if not tasks:
+            return
+        seam_dir.mkdir(parents=True, exist_ok=True)
+        for stale in seam_dir.iterdir():
+            if stale.is_file():
+                stale.unlink()
+
+        jobs = max(1, cfg.seam_carve_jobs)
+        if jobs > 1 and len(tasks) > 1:
+            # Explicit ``spawn``: face detection (cv2.dnn) has already run in
+            # this process, and a forked child inheriting that state can
+            # deadlock.  ``spawn`` starts clean interpreters.  Both entry points
+            # (CLI, scripts) run behind an ``if __name__ == "__main__"`` guard.
+            context = multiprocessing.get_context("spawn")
+            with ProcessPoolExecutor(max_workers=jobs, mp_context=context) as pool:
+                results = list(pool.map(_carve_frame, tasks))
+        else:
+            results = [_carve_frame(task) for task in tasks]
+
+        by_index = {scene.index: scene for scene in self.scenes}
+        carved = 0
+        for result in results:
+            if result is None:
+                continue
+            scene = by_index.get(result["index"])
+            if scene is None:
+                continue
+            scene.seam_carved_path = Path(result["path"])
+            scene.seam_carve_shrink = result["shrink"]
+            scene.seam_carve_size = result["size"]
+            carved += 1
+            self.debug(
+                f"scene {scene.index}: seam carved to {result['shrink'] * 100:.0f}% "
+                f"({result['size'][0]}x{result['size'][1]})"
+            )
+        self.log(f"seam carved frames: {carved}")
 
     def _step7_audio(self) -> None:
         """Measure each scene's left/right audio balance (see :mod:`anime2manga.audio`)."""

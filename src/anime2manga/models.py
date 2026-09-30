@@ -251,9 +251,18 @@ class Scene:
     #: right.  ``None`` when the source is mono/silent or has no audio.
     audio_balance_db: float | None = None
 
+    # --- Step 8: faces ----------------------------------------------------
+    faces: list[FaceBox] = field(default_factory=list)
+    #: Seam-carved version of :attr:`frame_path` (step 8b); ``None`` for
+    #: panoramas or when seam carving is disabled.
+    seam_carved_path: Path | None = None
+    #: Fraction of width removed by seam carving (the composite recommendation).
+    seam_carve_shrink: float | None = None
+    #: ``(width, height)`` of the seam-carved frame.
+    seam_carve_size: tuple[int, int] | None = None
+
     # --- Planned stages (stubs); kept typed so downstream code can rely on
     #     them without a schema migration. -----------------------------------
-    faces: list[FaceBox] = field(default_factory=list)  # step 8
     crop: CropOption | None = None  # step 9
     text_placement: TextPlacement | None = None  # step 10
 

@@ -82,6 +82,9 @@ def _render_scene(scene: Scene, base: Path) -> list[str]:
     frame_ref = _relative(scene.frame_path, base)
     if scene.frame_path is not None:
         lines.append(f"![Frame Image]({frame_ref})")
+        if scene.seam_carved_path is not None:
+            seam_ref = _relative(scene.seam_carved_path, base)
+            lines.append(f"![Seam Carved Frame]({seam_ref})")
         if scene.panorama_inpainted_path is not None:
             filled_ref = _relative(scene.panorama_inpainted_path, base)
             lines.append(f"![Inpainted Panorama]({filled_ref})")
@@ -90,6 +93,13 @@ def _render_scene(scene: Scene, base: Path) -> list[str]:
     size = f"{scene.frame_size[0]}x{scene.frame_size[1]}" if scene.frame_size else "unknown"
     lines.append(f"Frame Size: {size}")
     lines.append(f"Is Panoramic: {'Yes' if scene.is_panoramic else 'No'}")
+    if scene.seam_carved_path is not None and scene.seam_carve_shrink is not None:
+        lines.append(f"Seam Carve Shrink Percent: {round(scene.seam_carve_shrink * 100)}%")
+        if scene.seam_carve_size is not None:
+            lines.append(
+                f"Seam Carved Frame Size: "
+                f"{scene.seam_carve_size[0]}x{scene.seam_carve_size[1]}"
+            )
     if scene.is_panoramic and scene.pan_direction:
         lines.append(f"Pan Direction: {scene.pan_direction}")
     if scene.is_panoramic and scene.pan_start is not None and scene.pan_end is not None:
@@ -166,6 +176,15 @@ def scene_to_dict(scene: Scene) -> dict:
         ),
         "frame_size": scene.frame_size,
         "blur_score": round(scene.blur_score, 3) if scene.blur_score is not None else None,
+        "seam_carved_path": (
+            scene.seam_carved_path.as_posix() if scene.seam_carved_path else None
+        ),
+        "seam_carve_shrink": (
+            round(scene.seam_carve_shrink, 4)
+            if scene.seam_carve_shrink is not None
+            else None
+        ),
+        "seam_carve_size": scene.seam_carve_size,
         "faces": [
             {
                 "x": face.x,
