@@ -78,9 +78,9 @@ seam-carved.
 
 - **Engine** (`seam_carving.py`): L1 gradient energy; seams chosen with
   **forward energy**; faces get a large additive energy inside a dilated mask so
-  seams route around them; 50% width cap; frames scaled to `working_width`
-  (default 768) before carving. `record_seams`/`reconstruct` allow rebuilding any
-  intermediate width.
+  seams route around them; 50% width cap; frames are optionally downscaled to
+  `working_width` before carving. `record_seams`/`reconstruct` allow rebuilding
+  any intermediate width.
 - **Metrics** (`retarget.py`): guards `energy`, `forward`, `detail`, `ssim`.
   Composite `badness = max(normalised enabled guard signals)`, so the composite
   limit is the **minimum of the enabled guards' stop ratios**; default enabled
@@ -91,14 +91,21 @@ seam-carved.
   `energy_ratio` effective at any value. Do not reintroduce a bare `max()`.
 - **Defaults differ intentionally**: the `RetargetConfig`/experiment default is
   `energy_ratio=0.35`; the `anime2manga` pipeline uses `0.25` (user-tuned).
+- **Carve resolution**: both the pipeline and the experiment default to
+  `working_width=768`, which is ~13x faster than carving 1080p native (measured
+  over 261 frames). The pipeline sets it explicitly in its default
+  `RetargetConfig`. `working_width=None` (or `--seam-carve-working-width 0`)
+  carves at source resolution instead (vertical seams only remove columns, so the
+  height is unchanged).
 - **Two entry points**: the pipeline step (`--seam-carve*` flags, on by default;
   `--seam-carve-energy-ratio 0` or `--no-seam-carve` disables) writes
   `output/seam_frames/scene_NNNN.jpg` and adds `Seam Carve Shrink Percent:` /
   `Seam Carved Frame Size:` to `report.md`; the experiment script
   (`scripts/retarget_frames.py`) tunes thresholds over a frames folder into
   carved stills, SVG plots, contact sheets, CSV/JSON/Markdown/HTML.
-- **Output resolution is the working width**, not the source width; this is
-  surfaced in `report.md` via `Seam Carved Frame Size:`. Don't make it silent.
+- **Output resolution**: the pipeline carves and emits at the 768px working width
+  by default (source resolution if `working_width=None`/`0`). It is surfaced in
+  `report.md` via `Seam Carved Frame Size:`. Don't make it silent.
 - **Parallelism**: workers use an explicit `multiprocessing.get_context("spawn")`
   context. **Never force `fork`** — `cv2.dnn` face detection runs in the parent
   first and a forked child can deadlock. Parallel entry points need an

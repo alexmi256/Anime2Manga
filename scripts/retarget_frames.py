@@ -123,7 +123,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--max-shrink", type=float, default=0.5, help="Hard cap on width removed (0.5 = half)"
     )
     parser.add_argument(
-        "--working-width", type=int, default=768, help="Carving/analysis resolution"
+        "--working-width",
+        type=int,
+        default=768,
+        help="Downscale to this width before carving; 0 = carve at source resolution",
     )
     parser.add_argument(
         "--sample-step", type=float, default=0.1, help="Save a still every this fraction"
@@ -205,7 +208,7 @@ def main(argv: list[str] | None = None) -> int:
 
     config = RetargetConfig(
         max_shrink=args.max_shrink,
-        working_width=args.working_width,
+        working_width=args.working_width if args.working_width > 0 else None,
         sample_step=args.sample_step,
         energy_ratio=args.energy_ratio,
         energy_baseline_multiple=args.energy_baseline_multiple,

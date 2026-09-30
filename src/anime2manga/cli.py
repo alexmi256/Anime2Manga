@@ -241,9 +241,10 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=768,
         help=(
-            "Resolution the frame is carved and saved at (default: 768; the "
-            "source frame is scaled to this width, so this also sets the output "
-            "resolution; larger = finer/slower)."
+            "Downscale the frame to this width before carving (default: 768, "
+            "~13x faster than native; 0 = carve at the source resolution). A "
+            "non-zero value also sets the output resolution; larger = "
+            "finer/slower."
         ),
     )
     seam.add_argument(
@@ -354,7 +355,9 @@ def config_from_args(args: argparse.Namespace) -> PipelineConfig:
         retarget=RetargetConfig(
             energy_ratio=args.seam_carve_energy_ratio,
             max_shrink=args.seam_carve_max_shrink,
-            working_width=args.seam_carve_working_width,
+            working_width=(
+                args.seam_carve_working_width if args.seam_carve_working_width > 0 else None
+            ),
             detail_budget=args.seam_carve_detail_budget,
             strip_overlays=False,
             sample_step=1.0,

@@ -507,6 +507,12 @@ def test_seam_carve_runs_before_face_boxes_are_drawn(tmp_path, monkeypatch):
     assert scene.seam_carve_shrink == 0.2
 
 
+def test_pipeline_seam_carve_defaults_to_768_working_width(tmp_path):
+    """The pipeline downscales to 768px by default (~13x faster than native)."""
+    pipeline = _face_pipeline(tmp_path)
+    assert pipeline.config.retarget.working_width == 768
+
+
 def test_carve_frame_writes_and_reports():
     import tempfile
     from pathlib import Path
@@ -526,6 +532,34 @@ def test_carve_frame_writes_and_reports():
         assert out.exists()
         assert 0.0 < result["shrink"] <= 0.5
         assert result["size"][0] <= 160
+
+
+def test_carve_frame_keeps_source_height_at_native_resolution():
+    """The written seam frame keeps the source pixels (only columns removed)."""
+    import tempfile
+    from pathlib import Path
+
+    from anime2manga.pipeline import _carve_frame
+
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        src = root / "frame.png"
+        _gradient_frame(src, width=320, height=180)
+        out = root / "carved.jpg"
+        result = _carve_frame(
+            (
+                1,
+                str(src),
+                [],
+                str(out),
+                RetargetConfig(strip_overlays=False, working_width=None),
+                90,
+            )
+        )
+        assert result is not None
+        # Vertical seams never change the height; the width shrinks by the carve.
+        assert result["size"][1] == 180
+        assert 160 <= result["size"][0] <= 320
 
 
 def test_step8b_parallel_branch_uses_spawn_context(tmp_path, monkeypatch):

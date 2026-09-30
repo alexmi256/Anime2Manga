@@ -223,6 +223,43 @@ def test_html_has_all_markdown_columns_and_numeric_order(tmp_path: Path):
     assert html.index("scene_0001") < html.index("scene_0002") < html.index("scene_0010")
 
 
+def test_working_width_none_carves_at_source_resolution():
+    """``working_width=None`` leaves the frame at its native size (height kept)."""
+    from anime2manga.retarget import retarget_image
+
+    image = _gradient(width=400, height=200)
+    analysis = retarget_image(image, config=_config(working_width=None), faces=[])
+    assert analysis.working_size == (400, 200)
+    assert analysis.trace.working_scale == 1.0
+    carved = analysis.recommended_image
+    assert carved is not None
+    # Vertical seams only remove columns, so the height is untouched.
+    assert carved.shape[0] == 200
+    assert 200 <= carved.shape[1] <= 400
+
+
+def test_working_width_at_or_above_source_does_not_resize():
+    from anime2manga.retarget import retarget_image
+
+    image = _gradient(width=160, height=90)
+    analysis = retarget_image(image, config=_config(working_width=9999), faces=[])
+    assert analysis.working_size == (160, 90)
+
+
+def test_working_width_zero_is_treated_as_native():
+    from anime2manga.retarget import retarget_image
+
+    image = _gradient(width=160, height=90)
+    analysis = retarget_image(image, config=_config(working_width=0), faces=[])
+    assert analysis.working_size == (160, 90)
+
+
+def test_markdown_labels_native_working_width():
+    assert "original" in render_markdown([], _config(working_width=None))
+    assert "original" in render_markdown([], _config(working_width=0))
+    assert "96px" in render_markdown([], _config(working_width=96))
+
+
 def test_retarget_image_scales_full_resolution_faces():
     """Faces are detected at source resolution and must be scaled to the carve."""
     from anime2manga.retarget import _scale_faces, retarget_image

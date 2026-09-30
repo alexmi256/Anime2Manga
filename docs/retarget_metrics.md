@@ -13,8 +13,10 @@ There are two entry points:
   `--seam-carve-working-width`, `--seam-carve-detail-budget`,
   `--seam-carve-jobs`, `--seam-carve-quality`).  It reuses step 8's faces, runs
   before boxes are drawn, and writes `seam_frames/<scene>.jpg` plus a
-  `Seam Carve Shrink Percent:` line in `report.md`.  Default energy ratio is
-  `0.25`; `0` (or `--no-seam-carve`) disables it.
+  `Seam Carve Shrink Percent:` line in `report.md`.  Frames are downscaled to a
+  768px working width by default (~13x faster than 1080p native;
+  `--seam-carve-working-width 0` carves at source resolution); default energy
+  ratio is `0.25`; `0` (or `--no-seam-carve`) disables it.
 * **The experiment script** (`scripts/retarget_frames.py`) tunes thresholds over
   a folder of frames: it writes carved stills at every shrink step, signal
   plots, contact sheets and a browsable HTML report.
@@ -24,8 +26,9 @@ experiment script unless prefixed with `--seam-carve-`.
 
 ## Pipeline in one paragraph
 
-Each frame is scaled to `working_width` (default 768 px).  A gradient-magnitude
-energy map `E = |dI/dx| + |dI/dy|` is computed on the grayscale image.  Vertical
+Each frame is scaled to `working_width` (default 768 px; `None` or `0` = carve
+at the source resolution).  A gradient-magnitude energy map `E = |dI/dx| +
+|dI/dy|` is computed on the grayscale image.  Vertical
 seams are removed one at a time; the seam is whichever connected one-pixel-per-row
 path minimises **forward energy** (the energy *introduced* by the removal),
 plus a large extra cost inside the dilated face mask.  Every removal is logged as
@@ -154,10 +157,14 @@ pixels together; a rising curve means visible bending/ghosting.
 ## Geometry and engine parameters
 
 * **`--max-shrink`** (default `0.5`) — hard cap on the fraction of width removed.
-* **`--working-width`** (default `768`; pipeline flag `--seam-carve-working-width`)
-  — **the resolution the frame is carved and saved at**, and therefore the
-  resolution of the emitted seam frame.  A 1920px source becomes `768px` wide
-  before carving (then narrower by the shrink).  Higher = finer judgement and
+* **`--working-width`** (default `768` on both the experiment script and the
+  pipeline flag `--seam-carve-working-width`; `0` = native) — downscale the frame
+  to this width before carving.  The frame is carved **and saved** at the
+  resulting resolution, so this also sets the resolution of the emitted seams.
+  Both entry points downscale to `768px` by default (a 1920px source becomes
+  `768px` wide, then narrows by the shrink), which is about **13x faster** than
+  carving 1080p native.  Pass `0` to carve at the source resolution (a 1920px
+  source stays `1920px` wide).  Higher = finer judgement and
   nicer output, roughly quadratic cost; lower = fast preview.  The image and the
   face boxes are scaled to this width.  The pipeline reports the carved size as
   `Seam Carved Frame Size:` so the two images in the report never silently differ.
@@ -202,7 +209,7 @@ enabled, so you can compare candidates.
 | --- | --- |
 | `name` | Frame name (e.g. `scene_0120`), i.e. the source still. |
 | `faces` | Anime faces detected in the frame.  Drives the energetic face mask and the `face` budget. `0` means none. |
-| `working_size` | `[width, height]` the frame was analysed/carved at (after scaling to `working_width`). |
+| `working_size` | `[width, height]` the frame was analysed/carved at (source size when `working_width` is `None`, otherwise after scaling to `working_width`). |
 | `base_energy` | Mean gradient energy of the working image (arbitrary units); the denominator for `energy`. |
 | `energy_early` | The frame's own easy-seam energy at the end of the warm-up window, in units of `base_energy`.  High = detailed everywhere.  Feeds the adaptive margin. |
 | `energy_threshold` (`E thr`) | The effective threshold the **energy** guard actually used, in units of `base_energy`: `energy_ratio + multiple·max(0, early − reference)`.  When `> energy_ratio`, the adaptive term governs that frame. |
