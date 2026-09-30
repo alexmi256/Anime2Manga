@@ -17,9 +17,12 @@ planning, text placement, subtitle translation) are documented stubs.
 * Linux/macOS (bash scripts provided)
 
 Python dependencies (including `scikit-image` for panorama inpainting) are
-installed with `just install`.  `tesseract`/ImageMagick are **not** required for
-this milestone.  Bitmap subtitles (PGS/VobSub) are explicitly rejected because
-they would need OCR.
+installed with `just install`, which also builds the optional C++ seam-carving
+accelerator (with `-march=native`; set `ANIME2MANGA_PORTABLE_BUILD=1` to build a
+portable wheel instead).  Without a C++ compiler the carve simply runs on its
+pure-Python engine (a few times slower, same output).  `tesseract`/ImageMagick
+are **not** required for this milestone.  Bitmap subtitles (PGS/VobSub) are
+explicitly rejected because they would need OCR.
 
 ## Install
 
@@ -244,7 +247,10 @@ sometimes the subject is spread across the frame.  **Content-aware seam
 carving** (a.k.a. liquid rescaling) removes 1-pixel-wide connected vertical
 seams - one pixel per row, each following the lowest-energy path - so pixels
 come from low-detail regions and salient content keeps its proportions.  This
-lives in `seam_carving.py` (the engine) and `retarget.py` (the metrics).
+lives in `seam_carving.py` (the engine) and `retarget.py` (the metrics).  The
+carve loop ships in two interchangeable forms - a pure-Python engine and a
+compiled C++ accelerator (`src/anime2manga/_seamcarve.cpp`) that `just install`
+builds - and the pipeline uses the compiled one whenever it is available.
 
 * **In the pipeline (step 8b).**  Every regular frame is carved automatically
   (`--seam-carve`, on by default at energy ratio `0.25`; a ratio of `0` or

@@ -25,15 +25,99 @@ The engine also reports, per removed seam, how much high-detail and protected
 
 Only vertical seams are carved here; :func:`carve_height` reuses the same code
 on a transposed image.
+
+Implementation
+--------------
+The hot loop is available in two interchangeable forms: the pure-Python
+reference in this module and a compiled C++ engine
+(``src/anime2manga/_seamcarve.cpp``, built into ``anime2manga._seamcarve``).  The
+two are behaviourally identical (the compiled one is bit-identical in the carved
+image and seam trace, with the per-seam metrics agreeing to floating-point
+rounding).  :func:`carve_width` uses the compiled engine when it is importable
+and falls back to the Python loop otherwise (:data:`HAVE_NATIVE` reports which).
 """
 
 from __future__ import annotations
 
+import ctypes
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
 import cv2
 import numpy as np
+
+# The compiled engine is optional: when it cannot be imported the pure-Python
+# implementation below is used unchanged.
+try:  # pragma: no cover - presence depends on whether the build ran
+    from . import _seamcarve as _native_module
+except ImportError:  # pragma: no cover
+    _native_module = None
+
+
+class _SeamStepRaw(ctypes.Structure):
+    """Mirror of the C++ ``SeamStepRaw`` (``_seamcarve.cpp``)."""
+
+    _fields_ = [
+        ("removed_energy", ctypes.c_double),
+        ("added_energy", ctypes.c_double),
+        ("detail_pixels", ctypes.c_longlong),
+        ("protected_pixels", ctypes.c_longlong),
+        ("energy_sum_after", ctypes.c_double),
+        ("width_after", ctypes.c_int),
+        ("reserved", ctypes.c_int),
+    ]
+
+
+# void (*)(int k, const uint8_t* image, int h, int w, step fields..., void* user)
+_SeamCallback = ctypes.CFUNCTYPE(
+    None,
+    ctypes.c_int,
+    ctypes.c_void_p,
+    ctypes.c_int,
+    ctypes.c_int,
+    ctypes.c_double,
+    ctypes.c_double,
+    ctypes.c_longlong,
+    ctypes.c_longlong,
+    ctypes.c_double,
+    ctypes.c_int,
+    ctypes.c_void_p,
+)
+
+# int carve_width_full(...) -- see _seamcarve.cpp for the full signature.
+_CarveProto = ctypes.CFUNCTYPE(
+    ctypes.c_int,
+    ctypes.POINTER(ctypes.c_uint8),  # src
+    ctypes.c_int,  # height
+    ctypes.c_int,  # width
+    ctypes.c_int,  # target_width
+    ctypes.POINTER(ctypes.c_int),  # faces
+    ctypes.c_int,  # n_faces
+    ctypes.c_int,  # protect_faces
+    ctypes.c_double,  # face_dilation
+    ctypes.c_double,  # face_energy_factor
+    ctypes.c_double,  # detail_quantile
+    ctypes.c_int,  # record_seams
+    ctypes.c_int,  # n_snapshots
+    ctypes.POINTER(ctypes.c_double),  # snapshot_ratios
+    ctypes.POINTER(ctypes.c_uint8),  # snapshot buffers
+    ctypes.POINTER(ctypes.c_int),  # snapshot widths
+    ctypes.POINTER(ctypes.c_uint8),  # dst
+    ctypes.POINTER(ctypes.c_int),  # out_width
+    ctypes.POINTER(ctypes.c_int),  # out_seams
+    ctypes.POINTER(ctypes.c_int),  # seams_trace
+    ctypes.POINTER(_SeamStepRaw),  # steps
+    ctypes.POINTER(ctypes.c_double),  # base_energy
+    ctypes.POINTER(ctypes.c_double),  # energy_sum0
+    ctypes.POINTER(ctypes.c_longlong),  # detail_total
+    ctypes.POINTER(ctypes.c_longlong),  # protected_total
+    _SeamCallback,  # on_seam
+    ctypes.c_void_p,  # user
+)
+
+_NATIVE_CARVE = _CarveProto(_native_module.carve_addr()) if _native_module is not None else None
+#: True when the compiled engine is available and :func:`carve_width` uses it.
+HAVE_NATIVE = _NATIVE_CARVE is not None
 
 #: Energy added to pixels inside the face mask, as a multiple of the image's
 #: mean gradient energy.  Large enough that a seam only crosses a face when no
@@ -262,7 +346,202 @@ def _face_mask(shape: tuple[int, int], faces: list, config: SeamCarvingConfig) -
     return mask.astype(bool)
 
 
+def _carve_width_native(
+    image: np.ndarray,
+    target_width: int,
+    *,
+    faces: list | None,
+    config: SeamCarvingConfig,
+    on_seam: Callable[[int, np.ndarray, SeamStep], None] | None,
+    snapshot_ratios: tuple[float, ...],
+) -> CarveResult:
+    """Carve ``image`` with the compiled engine (returns the same result as the loop)."""
+    assert _NATIVE_CARVE is not None
+    height, width = image.shape[:2]
+    image = np.ascontiguousarray(image)
+
+    face_rows = [(int(b.x), int(b.y), int(b.width), int(b.height)) for b in (faces or [])]
+    face_arr = np.asarray(face_rows, np.int32) if face_rows else None
+    face_ptr = (
+        face_arr.ctypes.data_as(ctypes.POINTER(ctypes.c_int))
+        if face_arr is not None
+        else ctypes.POINTER(ctypes.c_int)()
+    )
+
+    n_seams = width - target_width
+    dst = np.empty_like(image)
+    steps_raw = (_SeamStepRaw * n_seams)()
+    if config.record_seams:
+        trace = np.empty((n_seams, height), np.int32)
+        trace_ptr = trace.ctypes.data_as(ctypes.POINTER(ctypes.c_int))
+    else:
+        trace = None
+        trace_ptr = ctypes.POINTER(ctypes.c_int)()
+
+    pending = sorted(r for r in snapshot_ratios if r > 0)
+    n_snap = len(pending)
+    if n_snap:
+        snap_buf = np.empty((n_snap, height, width, 3), np.uint8)
+        snap_widths = (ctypes.c_int * n_snap)()
+        snap_buf_ptr = snap_buf.ctypes.data_as(ctypes.POINTER(ctypes.c_uint8))
+        ratios_ptr = np.asarray(pending, np.float64).ctypes.data_as(
+            ctypes.POINTER(ctypes.c_double)
+        )
+        widths_ptr = snap_widths
+    else:
+        snap_buf = None
+        snap_widths = None
+        snap_buf_ptr = ctypes.POINTER(ctypes.c_uint8)()
+        ratios_ptr = ctypes.POINTER(ctypes.c_double)()
+        widths_ptr = ctypes.POINTER(ctypes.c_int)()
+
+    error: list[BaseException] = []
+
+    if on_seam is not None:
+
+        def _callback(
+            k, image_ptr, h, w, removed, added, detail, protected, energy_after, width_after, _user
+        ):
+            try:
+                arr = np.ctypeslib.as_array(
+                    (ctypes.c_uint8 * (h * w * 3)).from_address(image_ptr)
+                ).reshape(h, w, 3)
+                step = SeamStep(
+                    k=int(k),
+                    ratio=k / width,
+                    removed_energy=float(removed),
+                    added_energy=float(added),
+                    detail_pixels=int(detail),
+                    protected_pixels=int(protected),
+                    energy_sum_after=float(energy_after),
+                    width_after=int(width_after),
+                )
+                on_seam(int(k), arr, step)
+            except BaseException as exc:
+                # ctypes swallows callback exceptions, so stash it and re-raise
+                # after the native call returns.
+                error.append(exc)
+
+        callback = _SeamCallback(_callback)
+    else:
+        callback = _SeamCallback()
+
+    out_width = ctypes.c_int(0)
+    out_seams = ctypes.c_int(0)
+    base_energy = ctypes.c_double(0.0)
+    energy_sum0 = ctypes.c_double(0.0)
+    detail_total = ctypes.c_longlong(0)
+    protected_total = ctypes.c_longlong(0)
+
+    rc = _NATIVE_CARVE(
+        image.ctypes.data_as(ctypes.POINTER(ctypes.c_uint8)),
+        height,
+        width,
+        target_width,
+        face_ptr,
+        len(face_rows),
+        int(config.protect_faces),
+        config.face_dilation,
+        config.face_energy_factor,
+        config.detail_quantile,
+        int(config.record_seams),
+        n_snap,
+        ratios_ptr,
+        snap_buf_ptr,
+        widths_ptr,
+        dst.ctypes.data_as(ctypes.POINTER(ctypes.c_uint8)),
+        ctypes.byref(out_width),
+        ctypes.byref(out_seams),
+        trace_ptr,
+        steps_raw,
+        ctypes.byref(base_energy),
+        ctypes.byref(energy_sum0),
+        ctypes.byref(detail_total),
+        ctypes.byref(protected_total),
+        callback,
+        None,
+    )
+    if rc < 0:
+        raise RuntimeError("native seam carving failed")
+    if error:
+        raise error[0]
+
+    steps = [
+        SeamStep(
+            k=i + 1,
+            ratio=(i + 1) / width,
+            removed_energy=steps_raw[i].removed_energy,
+            added_energy=steps_raw[i].added_energy,
+            detail_pixels=int(steps_raw[i].detail_pixels),
+            protected_pixels=int(steps_raw[i].protected_pixels),
+            energy_sum_after=steps_raw[i].energy_sum_after,
+            width_after=int(steps_raw[i].width_after),
+        )
+        for i in range(out_seams.value)
+    ]
+    snapshots = {r: image.copy() for r in snapshot_ratios if r <= 0}
+    if snap_buf is not None and snap_widths is not None:
+        for i, ratio in enumerate(pending):
+            if snap_widths[i] >= 0:
+                snapshots[ratio] = snap_buf[i][:, : snap_widths[i]].copy()
+
+    return CarveResult(
+        image=dst[:, : out_width.value].copy(),
+        steps=steps,
+        width0=width,
+        height0=height,
+        base_energy=float(base_energy.value),
+        energy_sum0=float(energy_sum0.value),
+        detail_total=int(detail_total.value),
+        protected_total=int(protected_total.value),
+        snapshots=snapshots,
+        seams=list(trace) if trace is not None else [],
+    )
+
+
 def carve_width(
+    image: np.ndarray,
+    target_width: int,
+    *,
+    faces: list | None = None,
+    config: SeamCarvingConfig | None = None,
+    on_seam: Callable[[int, np.ndarray, SeamStep], None] | None = None,
+    snapshot_ratios: tuple[float, ...] = (),
+) -> CarveResult:
+    """Remove vertical seams from ``image`` until it is ``target_width`` wide.
+
+    Dispatches to the compiled engine when available (see :data:`HAVE_NATIVE`)
+    and to the pure-Python implementation otherwise.  The two are behaviourally
+    identical; ``faces``, ``on_seam`` and ``snapshot_ratios`` work with both.
+    """
+    cfg = config or SeamCarvingConfig()
+    if cfg.threads > 0:
+        cv2.setNumThreads(cfg.threads)
+    original = _as_bgr(image)
+    if original.dtype != np.uint8:
+        original = np.clip(original, 0, 255).astype(np.uint8)
+    width0 = original.shape[1]
+    target = max(1, min(int(target_width), width0))
+    if _NATIVE_CARVE is None or target >= width0:
+        return _carve_width_python(
+            original,
+            target,
+            faces=faces,
+            config=cfg,
+            on_seam=on_seam,
+            snapshot_ratios=snapshot_ratios,
+        )
+    return _carve_width_native(
+        original,
+        target,
+        faces=faces,
+        config=cfg,
+        on_seam=on_seam,
+        snapshot_ratios=snapshot_ratios,
+    )
+
+
+def _carve_width_python(
     image: np.ndarray,
     target_width: int,
     *,

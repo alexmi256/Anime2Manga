@@ -29,6 +29,14 @@ just retarget    # seam-carving experiment over output/frames -> output/retarget
 If `just` is unavailable, use `.venv/bin/python -m pytest`,
 `.venv/bin/ruff check src tests`, `.venv/bin/pyrefly check src tests`.
 
+`just install` also compiles the C++ seam-carving accelerator
+(`src/anime2manga/_seamcarve.cpp` -> `anime2manga._seamcarve`, via `setup.py`).
+When no C++ toolchain is available the build simply produces no extension and
+`seam_carving` falls back to its pure-Python engine, so the suite still passes.
+On Linux the extension is built with `-march=native` (it is compiled on the
+machine it runs on, ~1.7x faster); set `ANIME2MANGA_PORTABLE_BUILD=1` before
+building a wheel that must run elsewhere.
+
 Runtime dependencies are deliberately small: `numpy`, `opencv-python`,
 `scikit-image`. Do not add heavy frameworks.
 
@@ -41,11 +49,13 @@ Runtime dependencies are deliberately small: `numpy`, `opencv-python`,
   - `report.py` — `report.md` and `scenes.json` writers.
   - `metadata.py`, `subtitles.py`, `scene_detect.py`, `panorama.py`, `inpaint.py`, `timeline.py`, `frames.py`, `audio.py`, `faces.py` — pipeline stages.
   - `cropping.py`, `text_layout.py`, `translation.py`, `motion_vectors.py` — stubs.
-  - `seam_carving.py`, `retarget.py` — content-aware retargeting engine + metrics (step 8b / standalone).
+  - `seam_carving.py` — content-aware retargeting engine (step 8b / standalone); `_seamcarve.cpp` — its native C++ backend (built by `setup.py`, driven through `ctypes`); `retarget.py` — the retarget metrics.
   - `retarget_report.py` — rendering for the standalone experiment report.
   - `data/` — bundled anime face ONNX model.
+- `setup.py` — builds the optional native seam-carving extension (`src/anime2manga/_seamcarve.cpp`).
 - `scripts/` — `retarget_frames.py` (experiment CLI), `anime2manga.sh`, `fetch_face_model.py`.
 - `tests/` — pytest suite; synthetic data only, small and fast.
+- `experiments/` — exploratory benchmarks (e.g. `seam_carve_native/`), not part of the package.
 - `docs/retarget_metrics.md` — full seam-carving parameter/metric reference.
 - `README.md` — the user-facing document; keep it in sync with behaviour.
 
@@ -76,11 +86,17 @@ seam-carved.
 
 ## Seam carving (step 8b) — the important details
 
-- **Engine** (`seam_carving.py`): L1 gradient energy; seams chosen with
-  **forward energy**; faces get a large additive energy inside a dilated mask so
-  seams route around them; 50% width cap; frames are optionally downscaled to
-  `working_width` before carving. `record_seams`/`reconstruct` allow rebuilding
-  any intermediate width.
+- **Two backends, one behaviour**: `seam_carving.carve_width` uses the compiled
+  `anime2manga._seamcarve` engine when built and falls back to the pure-Python
+  loop otherwise (`seam_carving.HAVE_NATIVE`). They are bit-identical in the
+  carved image and seam trace and agree on the per-seam metrics to float
+  rounding. The native engine lives in `_seamcarve.cpp`; `_seamcarve.pyi` is its
+  type stub. `carve_height` transposes and calls the same path.
+- **Engine** (`seam_carving.py` / `_seamcarve.cpp`): L1 gradient energy; seams
+  chosen with **forward energy**; faces get a large additive energy inside a
+  dilated mask so seams route around them; 50% width cap; frames are optionally
+  downscaled to `working_width` before carving. `record_seams`/`reconstruct`
+  allow rebuilding any intermediate width.
 - **Metrics** (`retarget.py`): guards `energy`, `forward`, `detail`, `ssim`.
   Composite `badness = max(normalised enabled guard signals)`, so the composite
   limit is the **minimum of the enabled guards' stop ratios**; default enabled
@@ -121,6 +137,9 @@ seam-carved.
 - Run `just check` (or ruff + pyrefly + pytest) before considering work done.
 - The suite is currently ~200 passing, 2 skipped; keep it green and add tests
   for new behaviour (especially branches the CLI actually uses, e.g. `jobs > 1`).
+- Seam carving has two backends: keep `tests/test_seam_carving.py` covering
+  native-vs-Python parity (skipped when unbuilt) and the pure-Python fallback
+  (monkeypatch `_NATIVE_CARVE` to `None`).
 - For risky changes, do a bounded real run against `input.mkv`, e.g.
   `python -m anime2manga input.mkv --start-at 02:00 --end-at 02:40 -o /tmp/smoke`.
 - `just clean` removes `output/`; `--clean` removes generated experiment
