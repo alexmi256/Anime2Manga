@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -13,6 +14,7 @@ from .inpaint import InpaintConfig, available_inpaint_methods
 from .panorama import PanConfig
 from .pipeline import PipelineConfig, run_pipeline
 from .report import write_report, write_scene_json
+from .retarget import RetargetConfig
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -209,6 +211,60 @@ def build_parser() -> argparse.ArgumentParser:
         help="Draw bounding boxes around detected faces on chosen frames (default: on).",
     )
 
+    seam = parser.add_argument_group("seam carving")
+    seam.add_argument(
+        "--seam-carve",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Write a seam-carved (content-aware) version of each regular frame and "
+            "report its shrink percent (default: on; panoramas are never carved)."
+        ),
+    )
+    seam.add_argument(
+        "--seam-carve-energy-ratio",
+        type=float,
+        default=0.25,
+        help=(
+            "Energy guard threshold: lower stops earlier (less distortion). "
+            "0 disables seam carving entirely (default: 0.25)."
+        ),
+    )
+    seam.add_argument(
+        "--seam-carve-max-shrink",
+        type=float,
+        default=0.5,
+        help="Hard cap on width removed by seam carving (default: 0.5).",
+    )
+    seam.add_argument(
+        "--seam-carve-working-width",
+        type=int,
+        default=768,
+        help=(
+            "Resolution the frame is carved and saved at (default: 768; the "
+            "source frame is scaled to this width, so this also sets the output "
+            "resolution; larger = finer/slower)."
+        ),
+    )
+    seam.add_argument(
+        "--seam-carve-detail-budget",
+        type=float,
+        default=0.10,
+        help="Fraction of high-gradient pixels the detail guard may remove (default: 0.10).",
+    )
+    seam.add_argument(
+        "--seam-carve-jobs",
+        type=int,
+        default=min(8, os.cpu_count() or 1),
+        help="Worker processes for seam carving (default: min(8, CPUs)).",
+    )
+    seam.add_argument(
+        "--seam-carve-quality",
+        type=int,
+        default=92,
+        help="JPEG quality for seam-carved frames (default: 92).",
+    )
+
     audio = parser.add_argument_group("audio direction")
     audio.add_argument(
         "--no-audio-direction",
@@ -294,6 +350,18 @@ def config_from_args(args: argparse.Namespace) -> PipelineConfig:
             band_high_hz=args.audio_band_high,
         ),
         draw_face_boxes=args.face_boxes,
+        seam_carve=args.seam_carve and args.seam_carve_energy_ratio > 0,
+        retarget=RetargetConfig(
+            energy_ratio=args.seam_carve_energy_ratio,
+            max_shrink=args.seam_carve_max_shrink,
+            working_width=args.seam_carve_working_width,
+            detail_budget=args.seam_carve_detail_budget,
+            strip_overlays=False,
+            sample_step=1.0,
+            ssim_stride=0,
+        ),
+        seam_carve_jobs=args.seam_carve_jobs,
+        seam_carve_quality=args.seam_carve_quality,
         keep_analysis=args.keep_analysis,
         verbose=not args.quiet,
     )

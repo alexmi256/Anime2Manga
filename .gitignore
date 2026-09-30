@@ -222,3 +222,6 @@ __marimo__/
 /output/
 *.sup
 input.mkv
+
+# OpenChamber browser-panel screenshots
+.openchamber/

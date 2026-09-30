@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 from anime2manga.models import (
     ClipWindow,
@@ -41,6 +42,9 @@ def _result(tmp_path) -> PipelineResult:
     scene1.frame_time = 102.5
     scene1.blur_score = 123.4
     scene1.faces = [FaceBox(100, 200, 80, 90, 0.87)]
+    scene1.seam_carved_path = tmp_path / "seam_frames" / "scene_0001.jpg"
+    scene1.seam_carve_shrink = 0.25
+    scene1.seam_carve_size = (1440, 1080)
     scene1.subtitles = [SubtitleLine(1, 101.0, 103.0, "Hello there")]
     scene1.audio_focus = "left"
     scene1.audio_balance_db = 8.25
@@ -84,6 +88,11 @@ def test_build_markdown_contains_expected_sections(tmp_path):
     assert "Start Time: 00:01:40.000" in text
     assert "Start Frame: 2398" in text
     assert "![Frame Image](frames/scene_0001.jpg)" in text
+    assert "![Seam Carved Frame](seam_frames/scene_0001.jpg)" in text
+    # The seam-carved frame sits directly under the regular frame.
+    assert text.index("![Seam Carved Frame]") > text.index("![Frame Image](frames/scene_0001.jpg)")
+    assert "Seam Carve Shrink Percent: 25%" in text
+    assert "Seam Carved Frame Size: 1440x1080" in text
     assert "Is Panoramic: No" in text
     assert "Frame Number: 2458" in text
     assert "Face Bounding Boxes:" in text
@@ -104,6 +113,8 @@ def test_build_markdown_contains_expected_sections(tmp_path):
     assert "Pan Start Frame: 2529" in text
     assert "Pan End Frame: 2571" in text
     assert "- (no subtitles)" in text
+    # Panoramic scenes are never seam carved.
+    assert "Seam Carve Shrink Percent" not in text.split("# Scene Number 2", 1)[1]
 
 
 def test_frame_number_is_only_reported_for_regular_frames(tmp_path):
@@ -122,9 +133,15 @@ def test_scene_to_dict_is_json_serialisable(make_scene):
     scene.pan_start = 1.25
     scene.pan_end = 1.75
     scene.faces = [FaceBox(10, 20, 30, 40, 0.5)]
+    scene.seam_carved_path = Path("seam_frames/scene_0001.jpg")
+    scene.seam_carve_shrink = 0.31
+    scene.seam_carve_size = (1325, 1080)
     payload = scene_to_dict(scene)
     json.dumps(payload)  # must not raise
     assert payload["start"] == 1.0
+    assert payload["seam_carved_path"] == "seam_frames/scene_0001.jpg"
+    assert payload["seam_carve_shrink"] == 0.31
+    assert payload["seam_carve_size"] == [1325, 1080] or payload["seam_carve_size"] == (1325, 1080)
     assert payload["is_panoramic"] is False
     assert payload["pan_start"] == 1.25
     assert payload["pan_start_frame"] == 30

@@ -50,6 +50,11 @@ scripts/anime2manga.sh input.mkv --subtitle-track 5
 # are still detected and listed in the report):
 scripts/anime2manga.sh input.mkv --no-face-boxes
 
+# Seam carving (step 8b) is on by default at energy ratio 0.25. Retune it, or
+# disable it entirely with a ratio of 0 (or --no-seam-carve):
+scripts/anime2manga.sh input.mkv --seam-carve-energy-ratio 0.30
+scripts/anime2manga.sh input.mkv --seam-carve-energy-ratio 0
+
 # Skip left/right audio focus detection entirely:
 scripts/anime2manga.sh input.mkv --no-audio-direction
 
@@ -80,7 +85,8 @@ a video with no subtitles fails with a clear message.
 | 5. Timeline validation (no gaps/overlaps) | `timeline.py` | implemented |
 | 6. Frame sampling and clearest-frame selection | `frames.py` | implemented |
 | 7. Left/right audio focus | `audio.py` | implemented |
-| 8. Face detection, bounding boxes on chosen frames | `faces.py` | implemented |
+| 8. Face detection, optional bounding boxes on chosen frames | `faces.py` | implemented |
+| 8b. Seam-carve a copy of each regular frame (`--seam-carve`) | `seam_carving.py`, `retarget.py` | implemented |
 | 9. Face-aware cropping | `cropping.py` | stub |
 | 10. Text/bubble placement | `text_layout.py` | stub |
 | — Subtitle translation | `translation.py` | stub |
@@ -231,7 +237,73 @@ missed, and decorative patterns that resemble a face (e.g. skull ornaments) can
 occasionally produce a false positive.  Raise `score_threshold` to trade recall
 for precision, or adjust `content_scales`.
 
-## Debug output
+## How much can a frame be seam-carved before it looks bad?
+
+A 16:9 frame that must sit in a portrait manga panel cannot always be cropped:
+sometimes the subject is spread across the frame.  **Content-aware seam
+carving** (a.k.a. liquid rescaling) removes 1-pixel-wide connected vertical
+seams - one pixel per row, each following the lowest-energy path - so pixels
+come from low-detail regions and salient content keeps its proportions.  This
+lives in `seam_carving.py` (the engine) and `retarget.py` (the metrics).
+
+* **In the pipeline (step 8b).**  Every regular frame is carved automatically
+  (`--seam-carve`, on by default at energy ratio `0.25`; a ratio of `0` or
+  `--no-seam-carve` disables it).  It reuses step 8's face boxes and runs
+  *before* boxes are drawn, so the detector never runs twice and the carve sees
+  clean pixels; panoramas are never carved.  The carved still is written to
+  `seam_frames/` at `--seam-carve-working-width` resolution (default 768px wide),
+  and the report shows it under the regular frame with `Seam Carve Shrink
+  Percent:` and `Seam Carved Frame Size:` lines.
+* **Standalone experiment.**  The same code can be run over a folder of frames
+  to compare thresholds and inspect quality; see
+  [docs/retarget_metrics.md](docs/retarget_metrics.md).
+
+* **Engine.** Energy is the L1 gradient magnitude `|dI/dx| + |dI/dy|`; seams
+  are chosen with **forward energy** (Rubinstein, Shamir & Avidan, TOG 2008),
+  which minimises the energy *introduced* by a removal and so bends far fewer
+  lines than the classic backward method.  Faces (step 8) get a large added
+  energy term inside a dilated box so seams steer around them.  The image is
+  scaled to a 768px working width first, and the brief's **50% cap** is always
+  enforced.
+* **Metric.** Similar to GIMP/ImageMagick's liquid rescale, each removed seam is
+  logged, and four independent "stop here" guards are computed (all adjustable):
+
+  | Guard | Signal | Default stop |
+  | ----- | ------ | ------------ |
+  | `energy` | removed-seam energy / image mean, with a per-frame adaptive floor | ratio 0.35 (or 1.4x the frame's early baseline) |
+  | `forward` | cumulative forward energy per pixel / warm-up baseline | 2.5x |
+  | `detail` | high-gradient pixels removed, plus face pixels removed | 10% / 2% |
+  | `ssim` | structural similarity to the uniformly-rescaled original | 0.5 |
+
+  The composite `badness` is the worst enabled normalised guard, so it reaches
+  `1.0` exactly when the first guard trips; `recommended` is that shrink
+  fraction.  `energy` + `detail` are on by default (the reliable, well-separated
+  signals); `forward` and `ssim` are optional.  The energy guard is **adaptive**
+  so uniformly detailed frames are not stopped instantly: its effective
+  threshold is `energy_ratio + energy_baseline_multiple * max(0, early -
+  energy_reference)`, which keeps `energy_ratio` meaningful at any value.
+
+  Every parameter, the exact formulas, the `summary.csv` columns and tuning
+  recipes are documented in [docs/retarget_metrics.md](docs/retarget_metrics.md).
+
+* **Run it.**  This is an experiment over an existing frames folder, not part of
+  the main pipeline:
+
+  ```bash
+  just retarget                       # output/frames -> output/retarget, 8 jobs
+  # or directly, with tuning:
+  PYTHONPATH=src .venv/bin/python scripts/retarget_frames.py \
+      ~/PycharmProjects/Anime2Manga/output/frames -o output/retarget -j 12 \
+      --energy-ratio 0.35 --energy-baseline-multiple 1.4 --detail-budget 0.10
+  ```
+
+  Outputs per frame: the carved stills at every 10% and at the recommended stop,
+  a labelled contact strip, a signal plot (SVG), and a green-box-free original.
+  Run-wide: `summary.csv`, `summary.json`, `report.md`, a browsable
+  `report.html`, and tiled `overview/` sheets.  Adjust the thresholds per image
+  after inspecting `report.html`; re-running with new values is cheap.
+
+
 
 Running the pipeline prints, and logs to `output/scenes.json`:
 
