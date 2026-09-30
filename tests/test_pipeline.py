@@ -290,62 +290,222 @@ def _face_pipeline(tmp_path, **overrides) -> Pipeline:
     return Pipeline(config)
 
 
-def test_step8_faces_attaches_boxes_and_annotates(tmp_path, monkeypatch):
-    frame = tmp_path / "frame.png"
-    cv2.imwrite(str(frame), np.zeros((40, 40, 3), np.uint8))
-    scene = Scene(index=1, start=0.0, end=1.0, fps=24.0)
-    scene.frame_path = frame
-    pipeline = _face_pipeline(tmp_path)
-    pipeline.scenes = [scene]
-
-    box = FaceBox(1, 2, 3, 4, 0.5)
-    monkeypatch.setattr("anime2manga.faces.detect_faces", lambda path, config=None: [box])
-    drawn: list[list[FaceBox]] = []
+def _patch_detectors(monkeypatch, *, faces=None, heads=None, persons=None) -> None:
+    """Stub all three detectors so tests never load the real models."""
     monkeypatch.setattr(
-        "anime2manga.faces.annotate_faces",
-        lambda path, boxes, **kwargs: drawn.append(list(boxes)),
+        "anime2manga.faces.detect_faces", lambda path, config=None: list(faces or [])
+    )
+    monkeypatch.setattr(
+        "anime2manga.heads.detect_heads", lambda path, config=None: list(heads or [])
+    )
+    monkeypatch.setattr(
+        "anime2manga.persons.detect_persons", lambda path, config=None: list(persons or [])
     )
 
-    pipeline._step8_faces()
 
-    assert scene.faces == [box]
-    assert drawn == [[box]]
+def _patch_annotate(monkeypatch, record: list) -> None:
+    """Record the ``(category, boxes)`` groups passed to the annotator."""
+
+    def fake(path, groups, **kwargs):
+        record.append([(category, list(boxes)) for category, boxes in groups])
+        return path
+
+    monkeypatch.setattr("anime2manga.pipeline.detection.annotate_categories", fake)
 
 
-def test_step8_faces_skips_drawing_when_disabled(tmp_path, monkeypatch):
+def test_step8_detections_attaches_boxes_and_annotates(tmp_path, monkeypatch):
     frame = tmp_path / "frame.png"
     cv2.imwrite(str(frame), np.zeros((40, 40, 3), np.uint8))
     scene = Scene(index=1, start=0.0, end=1.0, fps=24.0)
     scene.frame_path = frame
-    pipeline = _face_pipeline(tmp_path, draw_face_boxes=False)
+    # Faces are off by default; enable all three including face boxes.
+    pipeline = _face_pipeline(
+        tmp_path, detect_face=True, draw_face_boxes=True
+    )
+    pipeline.scenes = [scene]
+
+    face, head, person = (
+        FaceBox(1, 2, 3, 4, 0.5),
+        FaceBox(5, 6, 7, 8, 0.6),
+        FaceBox(9, 10, 11, 12, 0.7),
+    )
+    _patch_detectors(monkeypatch, faces=[face], heads=[head], persons=[person])
+    drawn: list = []
+    _patch_annotate(monkeypatch, drawn)
+
+    pipeline._step8_detections()
+
+    assert scene.faces == [face]
+    assert scene.heads == [head]
+    assert scene.persons == [person]
+    assert drawn == [[("face", [face]), ("head", [head]), ("person", [person])]]
+
+
+def test_step8_faces_disabled_by_default(tmp_path, monkeypatch):
+    """``detect_face`` defaults off so the face model never runs unasked."""
+    frame = tmp_path / "frame.png"
+    cv2.imwrite(str(frame), np.zeros((40, 40, 3), np.uint8))
+    scene = Scene(index=1, start=0.0, end=1.0, fps=24.0)
+    scene.frame_path = frame
+    pipeline = _face_pipeline(tmp_path)
+    pipeline.scenes = [scene]
+
+    def fail(*args, **kwargs):
+        raise AssertionError("faces are disabled by default")
+
+    monkeypatch.setattr("anime2manga.faces.detect_faces", fail)
+    _patch_detectors(monkeypatch, heads=[FaceBox(1, 1, 2, 2)], persons=[])
+    drawn: list = []
+    _patch_annotate(monkeypatch, drawn)
+
+    pipeline._step8_detections()
+
+    assert scene.faces == []
+    assert scene.heads == [FaceBox(1, 1, 2, 2)]
+    assert drawn == [[("head", [FaceBox(1, 1, 2, 2)]), ("person", [])]]
+
+
+def test_step8_detections_skip_when_all_disabled(tmp_path, monkeypatch):
+    frame = tmp_path / "frame.png"
+    cv2.imwrite(str(frame), np.zeros((40, 40, 3), np.uint8))
+    scene = Scene(index=1, start=0.0, end=1.0, fps=24.0)
+    scene.frame_path = frame
+    pipeline = _face_pipeline(
+        tmp_path, detect_face=False, detect_head=False, detect_person=False
+    )
+    pipeline.scenes = [scene]
+
+    def fail(*args, **kwargs):
+        raise AssertionError("detection is disabled")
+
+    monkeypatch.setattr("anime2manga.faces.detect_faces", fail)
+    monkeypatch.setattr("anime2manga.heads.detect_heads", fail)
+    monkeypatch.setattr("anime2manga.persons.detect_persons", fail)
+
+    pipeline._step8_detections()
+
+    assert scene.faces == []
+    assert scene.heads == []
+    assert scene.persons == []
+
+
+def test_step8_head_and_person_can_be_disabled_individually(tmp_path, monkeypatch):
+    frame = tmp_path / "frame.png"
+    cv2.imwrite(str(frame), np.zeros((40, 40, 3), np.uint8))
+    scene = Scene(index=1, start=0.0, end=1.0, fps=24.0)
+    scene.frame_path = frame
+    pipeline = _face_pipeline(tmp_path, detect_person=False)
+    pipeline.scenes = [scene]
+
+    def fail(*args, **kwargs):
+        raise AssertionError("person detection disabled")
+
+    monkeypatch.setattr("anime2manga.persons.detect_persons", fail)
+    _patch_detectors(monkeypatch, heads=[FaceBox(1, 1, 2, 2)])
+
+    pipeline._step8_detections()
+
+    assert scene.heads == [FaceBox(1, 1, 2, 2)]
+    assert scene.persons == []
+
+
+def test_step8_detections_skips_drawing_when_master_disabled(tmp_path, monkeypatch):
+    frame = tmp_path / "frame.png"
+    cv2.imwrite(str(frame), np.zeros((40, 40, 3), np.uint8))
+    scene = Scene(index=1, start=0.0, end=1.0, fps=24.0)
+    scene.frame_path = frame
+    pipeline = _face_pipeline(tmp_path, draw_boxes=False)
     pipeline.scenes = [scene]
 
     box = FaceBox(1, 2, 3, 4, 0.5)
-    monkeypatch.setattr("anime2manga.faces.detect_faces", lambda path, config=None: [box])
+    _patch_detectors(monkeypatch, heads=[box])
 
     def fail(*args, **kwargs):
-        raise AssertionError("annotate_faces should not be called")
+        raise AssertionError("annotate_categories should not be called")
 
-    monkeypatch.setattr("anime2manga.faces.annotate_faces", fail)
+    monkeypatch.setattr("anime2manga.pipeline.detection.annotate_categories", fail)
 
-    pipeline._step8_faces()
+    pipeline._step8_detections()
 
-    assert scene.faces == [box]
+    assert scene.heads == [box]
 
 
-def test_step8_faces_skips_scenes_without_frames(tmp_path, monkeypatch):
+def test_step8_boxes_can_be_per_category(tmp_path, monkeypatch):
+    """Master on, but only the person boxes are drawn."""
+    frame = tmp_path / "frame.png"
+    cv2.imwrite(str(frame), np.zeros((40, 40, 3), np.uint8))
+    scene = Scene(index=1, start=0.0, end=1.0, fps=24.0)
+    scene.frame_path = frame
+    pipeline = _face_pipeline(
+        tmp_path, detect_face=True, draw_head_boxes=False, draw_face_boxes=True
+    )
+    pipeline.scenes = [scene]
+
+    face, head, person = FaceBox(1, 1, 1, 1), FaceBox(2, 2, 2, 2), FaceBox(3, 3, 3, 3)
+    _patch_detectors(monkeypatch, faces=[face], heads=[head], persons=[person])
+    drawn: list = []
+    _patch_annotate(monkeypatch, drawn)
+
+    pipeline._step8_detections()
+
+    assert drawn == [[("face", [face]), ("person", [person])]]
+
+
+def test_step8_detections_skips_scenes_without_frames(tmp_path, monkeypatch):
     scene = Scene(index=1, start=0.0, end=1.0, fps=24.0)
     pipeline = _face_pipeline(tmp_path)
     pipeline.scenes = [scene]
 
     def fail(*args, **kwargs):
-        raise AssertionError("detect_faces should not be called without a frame")
+        raise AssertionError("detectors should not be called without a frame")
 
     monkeypatch.setattr("anime2manga.faces.detect_faces", fail)
+    monkeypatch.setattr("anime2manga.heads.detect_heads", fail)
+    monkeypatch.setattr("anime2manga.persons.detect_persons", fail)
 
-    pipeline._step8_faces()
+    pipeline._step8_detections()
 
     assert scene.faces == []
+
+
+def test_step8_warns_about_near_full_frame_detection(tmp_path, monkeypatch):
+    frame = tmp_path / "frame.png"
+    cv2.imwrite(str(frame), np.zeros((100, 200, 3), np.uint8))
+    scene = Scene(index=1, start=0.0, end=1.0, fps=24.0)
+    scene.frame_path = frame
+    scene.frame_size = (200, 100)
+    pipeline = _face_pipeline(tmp_path)
+    pipeline.scenes = [scene]
+
+    messages: list[str] = []
+    monkeypatch.setattr(pipeline, "debug", messages.append)
+
+    # A near full-frame head box is surfaced; a normal person box is not.
+    _patch_detectors(
+        monkeypatch, heads=[FaceBox(0, 0, 199, 99)], persons=[FaceBox(5, 5, 20, 20)]
+    )
+
+    pipeline._step8_detections()
+
+    text = "\n".join(messages)
+    assert "head box covers" in text and "artefacts" in text
+    assert "person box covers" not in text
+
+
+def test_step8_no_size_no_warning(tmp_path, monkeypatch):
+    frame = tmp_path / "frame.png"
+    cv2.imwrite(str(frame), np.zeros((100, 200, 3), np.uint8))
+    scene = Scene(index=1, start=0.0, end=1.0, fps=24.0)
+    scene.frame_path = frame  # frame_size deliberately left None
+    pipeline = _face_pipeline(tmp_path)
+    pipeline.scenes = [scene]
+    messages: list[str] = []
+    monkeypatch.setattr(pipeline, "debug", messages.append)
+    _patch_detectors(monkeypatch, heads=[FaceBox(0, 0, 199, 99)])
+
+    pipeline._step8_detections()
+
+    assert "box covers" not in "\n".join(messages)
 
 
 def _audio_media(make_media, channels: int = 2):
@@ -426,9 +586,9 @@ def test_step8b_writes_seam_frame_and_shrink(tmp_path, monkeypatch):
     scene.frame_path = tmp_path / "frame.png"
     pipeline = _face_pipeline(tmp_path)
     pipeline.scenes = [scene]
-    monkeypatch.setattr("anime2manga.faces.detect_faces", lambda path, config=None: [])
+    _patch_detectors(monkeypatch)
 
-    pipeline._step8_faces()
+    pipeline._step8_detections()
 
     assert scene.seam_carved_path is not None
     assert scene.seam_carved_path.exists()
@@ -448,9 +608,9 @@ def test_seam_carve_disabled_when_energy_ratio_zero(tmp_path, monkeypatch):
         retarget=RetargetConfig(energy_ratio=0.0, strip_overlays=False),
     )
     pipeline.scenes = [scene]
-    monkeypatch.setattr("anime2manga.faces.detect_faces", lambda path, config=None: [])
+    _patch_detectors(monkeypatch)
 
-    pipeline._step8_faces()
+    pipeline._step8_detections()
 
     assert scene.seam_carved_path is None
     assert not (tmp_path / "out" / "seam_frames").exists()
@@ -463,9 +623,9 @@ def test_seam_carve_skips_panorama(tmp_path, monkeypatch):
     scene.frame_path = tmp_path / "pano.png"
     pipeline = _face_pipeline(tmp_path)
     pipeline.scenes = [scene]
-    monkeypatch.setattr("anime2manga.faces.detect_faces", lambda path, config=None: [])
+    _patch_detectors(monkeypatch)
 
-    pipeline._step8_faces()
+    pipeline._step8_detections()
 
     assert scene.seam_carved_path is None
 
@@ -491,17 +651,15 @@ def test_seam_carve_runs_before_face_boxes_are_drawn(tmp_path, monkeypatch):
             recommended=types.SimpleNamespace(ratio=0.2),
         )
 
-    monkeypatch.setattr(
-        "anime2manga.faces.detect_faces", lambda path, config=None: [FaceBox(1, 2, 3, 4)]
-    )
+    _patch_detectors(monkeypatch, heads=[FaceBox(1, 2, 3, 4)])
     monkeypatch.setattr("anime2manga.pipeline.retarget_image", fake_retarget)
 
-    def fake_annotate(path, boxes, **kwargs):
+    def fake_annotate(path, groups, **kwargs):
         order.append("annotate")
 
-    monkeypatch.setattr("anime2manga.faces.annotate_faces", fake_annotate)
+    monkeypatch.setattr("anime2manga.pipeline.detection.annotate_categories", fake_annotate)
 
-    pipeline._step8_faces()
+    pipeline._step8_detections()
 
     assert order == ["carve", "annotate"]
     assert scene.seam_carve_shrink == 0.2
@@ -562,6 +720,36 @@ def test_carve_frame_keeps_source_height_at_native_resolution():
         assert 160 <= result["size"][0] <= 320
 
 
+def test_step8b_seam_carve_protects_head_and_person_boxes(tmp_path, monkeypatch):
+    """The carver must receive every detected category's boxes, not just faces."""
+    _gradient_frame(tmp_path / "frame.png")
+    scene = Scene(index=1, start=0.0, end=1.0, fps=24.0)
+    scene.frame_path = tmp_path / "frame.png"
+    pipeline = _face_pipeline(tmp_path)
+    pipeline.scenes = [scene]
+
+    head = FaceBox(10, 10, 20, 20)
+    person = FaceBox(40, 5, 30, 40)
+    _patch_detectors(monkeypatch, heads=[head], persons=[person])
+
+    captured: list = []
+
+    def fake_retarget(image, **kwargs):
+        captured.append(list(kwargs.get("boxes") or []))
+        import types
+
+        return types.SimpleNamespace(
+            recommended_image=image,
+            recommended=types.SimpleNamespace(ratio=0.1),
+        )
+
+    monkeypatch.setattr("anime2manga.pipeline.retarget_image", fake_retarget)
+
+    pipeline._step8_detections()
+
+    assert captured == [[head, person]]
+
+
 def test_step8b_parallel_branch_uses_spawn_context(tmp_path, monkeypatch):
     """The CLI default (jobs>1) must use an explicit spawn context."""
     import anime2manga.pipeline as pipeline_module
@@ -611,11 +799,11 @@ def test_seam_carve_panorama_skipped_and_ratio_zero_together(tmp_path, monkeypat
     panorama.frame_path = tmp_path / "pano.png"
     _gradient_frame(panorama.frame_path, width=200)
 
-    monkeypatch.setattr("anime2manga.faces.detect_faces", lambda path, config=None: [])
+    _patch_detectors(monkeypatch)
 
     enabled = _face_pipeline(tmp_path)
     enabled.scenes = [regular, panorama]
-    enabled._step8_faces()
+    enabled._step8_detections()
     assert regular.seam_carved_path is not None
     assert panorama.seam_carved_path is None
 
@@ -624,6 +812,6 @@ def test_seam_carve_panorama_skipped_and_ratio_zero_together(tmp_path, monkeypat
         tmp_path, retarget=RetargetConfig(energy_ratio=0.0, strip_overlays=False)
     )
     disabled.scenes = [regular, panorama]
-    disabled._step8_faces()
+    disabled._step8_detections()
     assert regular.seam_carved_path is None
     assert panorama.seam_carved_path is None

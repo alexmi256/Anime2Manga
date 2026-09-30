@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from .models import PipelineResult, Scene
+from .models import DetectionBox, PipelineResult, Scene
 
 
 def format_time(seconds: float) -> str:
@@ -68,6 +68,22 @@ def build_markdown(result: PipelineResult) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
+def _detection_lines(label: str, boxes, *, has_frame: bool, empty: str) -> list[str]:
+    """Render one category's ``X Bounding Boxes:`` block."""
+    out = [f"{label} Bounding Boxes:"]
+    if not has_frame:
+        out.append("- (no chosen frame)")
+    elif boxes:
+        for box in boxes:
+            out.append(
+                f"- x={box.x}, y={box.y}, width={box.width}, "
+                f"height={box.height}, confidence={box.confidence:.2f}"
+            )
+    else:
+        out.append(f"- (no {empty} detected)")
+    return out
+
+
 def _render_scene(scene: Scene, base: Path) -> list[str]:
     lines: list[str] = []
     lines.append(f"# Scene Number {scene.index}")
@@ -111,17 +127,12 @@ def _render_scene(scene: Scene, base: Path) -> list[str]:
         lines.append(f"Frame Time: {format_time(scene.frame_time)}")
     if scene.frame_time is not None and not scene.is_panoramic:
         lines.append(f"Frame Number: {scene.frame_at(scene.frame_time)}")
-    lines.append("Face Bounding Boxes:")
-    if scene.frame_path is None:
-        lines.append("- (no chosen frame)")
-    elif scene.faces:
-        for face in scene.faces:
-            lines.append(
-                f"- x={face.x}, y={face.y}, width={face.width}, "
-                f"height={face.height}, confidence={face.confidence:.2f}"
-            )
-    else:
-        lines.append("- (no faces detected)")
+    has_frame = scene.frame_path is not None
+    lines.extend(_detection_lines("Face", scene.faces, has_frame=has_frame, empty="faces"))
+    lines.extend(_detection_lines("Head", scene.heads, has_frame=has_frame, empty="heads"))
+    lines.extend(
+        _detection_lines("Person", scene.persons, has_frame=has_frame, empty="persons")
+    )
     lines.append("")
     lines.append("## Text")
     if scene.subtitles:
@@ -138,6 +149,20 @@ def write_report(result: PipelineResult) -> Path:
     path = result.output_dir / "report.md"
     path.write_text(build_markdown(result), encoding="utf-8")
     return path
+
+
+def _boxes(boxes: list[DetectionBox]) -> list[dict]:
+    """Serialise detection boxes for ``scenes.json``."""
+    return [
+        {
+            "x": box.x,
+            "y": box.y,
+            "width": box.width,
+            "height": box.height,
+            "confidence": box.confidence,
+        }
+        for box in boxes
+    ]
 
 
 def scene_to_dict(scene: Scene) -> dict:
@@ -185,16 +210,9 @@ def scene_to_dict(scene: Scene) -> dict:
             else None
         ),
         "seam_carve_size": scene.seam_carve_size,
-        "faces": [
-            {
-                "x": face.x,
-                "y": face.y,
-                "width": face.width,
-                "height": face.height,
-                "confidence": face.confidence,
-            }
-            for face in scene.faces
-        ],
+        "faces": _boxes(scene.faces),
+        "heads": _boxes(scene.heads),
+        "persons": _boxes(scene.persons),
         "subtitle_count": len(scene.subtitles),
         "subtitles": [
             {"start": round(s.start, 3), "end": round(s.end, 3), "text": s.text}

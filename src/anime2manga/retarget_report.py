@@ -35,7 +35,7 @@ SIGNAL_COLORS: dict[str, str] = {
 SIGNAL_LABELS: dict[str, str] = {
     "energy": "energy",
     "forward": "forward",
-    "detail": "detail+face",
+    "detail": "detail+subject",
     "ssim": "structural",
     "composite": "composite",
 }
@@ -307,7 +307,7 @@ def render_markdown(records: list[dict[str, Any]], config: RetargetConfig) -> st
         f"- Enabled guards: **{', '.join(config.enabled_methods)}**",
         f"- Thresholds: energy ratio {config.energy_ratio:g} "
         f"(adaptive +{config.energy_baseline_multiple:g} above early {config.energy_reference:g}), "
-        f"detail budget {_fmt(config.detail_budget)}, face budget {_fmt(config.face_budget)}",
+        f"detail budget {_fmt(config.detail_budget)}, subject budget {_fmt(config.subject_budget)}",
         "",
         "`COMP` is the composite recommendation: the first enabled guard to trip.  "
         "`E thr` is the effective energy threshold the frame actually used; when it "
@@ -396,7 +396,7 @@ def render_html(
         "<tr><td>Frame</td><td>Source still (<code>scene_NNNN</code>). "
         "Click to jump to its contact strip and signal plot.</td></tr>"
         "<tr><td>Stop preview</td><td>The frame carved to <b>COMP</b> (the recommended shrink).</td></tr>"
-        "<tr><td>Faces</td><td>Anime faces detected. Drives the energetic face mask and the face budget.</td></tr>"
+        "<tr><td>Faces</td><td>Subjects detected (faces, heads and persons share one protective mask). Drives the energetic mask and the subject budget.</td></tr>"
         "<tr><td>Energy</td><td>Where the energy guard trips: the removed seam's energy reaches "
         "<b>E thr</b> as low-detail seams run out.</td></tr>"
         "<tr><td>E thr</td><td>Effective energy threshold actually used, in units of the image's "
@@ -404,7 +404,7 @@ def render_html(
         "<tr><td>Forward</td><td>Where the forward-energy guard trips (energy the removal "
         "<i>introduces</i>, i.e. structure bending). Optional; informational when off.</td></tr>"
         "<tr><td>Detail</td><td>Where the detail budget trips: too many high-gradient pixels "
-        "(or face pixels) have been removed.</td></tr>"
+        "(or protected subject pixels) have been removed.</td></tr>"
         "<tr><td>Structural</td><td>Where SSIM to the uniformly rescaled original hits the floor. "
         "Optional; informational when off.</td></tr>"
         "<tr><td>COMP</td><td><b>Recommended stop</b>: the first enabled guard to trip = the "
@@ -420,7 +420,7 @@ def render_html(
         f"working width {_working_width_label(config)} &middot; guards "
         f"{', '.join(config.enabled_methods)} &middot; energy {config.energy_ratio:g} "
         f"(adaptive +{config.energy_baseline_multiple:g} above early {config.energy_reference:g}) "
-        f"&middot; detail {_fmt(config.detail_budget)} &middot; face {_fmt(config.face_budget)}</p>"
+        f"&middot; detail {_fmt(config.detail_budget)} &middot; subject {_fmt(config.subject_budget)}</p>"
         + guide
         + "<table><thead><tr><th>Frame</th><th>Stop preview</th><th>Faces</th>"
         "<th>Energy</th><th>E thr</th><th>Forward</th><th>Detail</th>"

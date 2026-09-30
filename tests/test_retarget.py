@@ -47,7 +47,7 @@ def _config(**kwargs) -> RetargetConfig:
 
 def test_analyze_frame_reports_every_method_within_cap(tmp_path: Path):
     path = _write(tmp_path / "frame.png", _gradient())
-    analysis = analyze_frame(path, config=_config(), faces=[])
+    analysis = analyze_frame(path, config=_config(), boxes=[])
     assert analysis is not None
     assert set(analysis.limits) == {*METHODS, "composite"}
     for limit in analysis.limits.values():
@@ -59,14 +59,14 @@ def test_analyze_frame_reports_every_method_within_cap(tmp_path: Path):
 
 def test_max_shrink_cap_is_respected(tmp_path: Path):
     path = _write(tmp_path / "frame.png", _gradient())
-    analysis = analyze_frame(path, config=_config(max_shrink=0.3), faces=[])
+    analysis = analyze_frame(path, config=_config(max_shrink=0.3), boxes=[])
     assert analysis is not None
     assert all(limit.ratio <= 0.3 + 1e-9 for limit in analysis.limits.values())
 
 
 def test_primary_method_selects_that_limit(tmp_path: Path):
     path = _write(tmp_path / "frame.png", _gradient())
-    analysis = analyze_frame(path, config=_config(primary_method="energy"), faces=[])
+    analysis = analyze_frame(path, config=_config(primary_method="energy"), boxes=[])
     assert analysis is not None
     assert analysis.recommended is analysis.limits["energy"]
 
@@ -74,7 +74,7 @@ def test_primary_method_selects_that_limit(tmp_path: Path):
 def test_flat_frame_can_shrink_far(tmp_path: Path):
     flat = np.full((90, 160, 3), 128, np.uint8)
     path = _write(tmp_path / "flat.png", flat)
-    analysis = analyze_frame(path, config=_config(), faces=[])
+    analysis = analyze_frame(path, config=_config(), boxes=[])
     assert analysis is not None
     # Nothing but the frame edges is detailed, so the energy guard should allow
     # almost the whole 50%.
@@ -82,7 +82,7 @@ def test_flat_frame_can_shrink_far(tmp_path: Path):
 
 
 def test_unreadable_frame_returns_none(tmp_path: Path):
-    assert analyze_frame(tmp_path / "missing.png", config=_config(), faces=[]) is None
+    assert analyze_frame(tmp_path / "missing.png", config=_config(), boxes=[]) is None
 
 
 def test_strip_green_overlay_removes_box():
@@ -116,7 +116,7 @@ def _green_fraction(image: np.ndarray) -> float:
 
 def test_report_artifacts_are_written(tmp_path: Path):
     path = _write(tmp_path / "frame.png", _gradient())
-    analysis = analyze_frame(path, config=_config(), faces=[])
+    analysis = analyze_frame(path, config=_config(), boxes=[])
     assert analysis is not None
     paths = write_frame_outputs(
         analysis,
@@ -145,7 +145,7 @@ def test_report_artifacts_are_written(tmp_path: Path):
 
 def test_thumbnail_preserves_carved_aspect(tmp_path: Path):
     path = _write(tmp_path / "frame.png", _gradient())
-    analysis = analyze_frame(path, config=_config(), faces=[])
+    analysis = analyze_frame(path, config=_config(), boxes=[])
     assert analysis is not None
     write_frame_outputs(
         analysis,
@@ -172,7 +172,7 @@ def test_overview_pillar_boxes_to_uniform_cells(tmp_path: Path):
         name = f"scene_{index:04d}"
         image = _gradient(width=width, height=90)
         path = _write(tmp_path / f"{name}.png", image)
-        analysis = analyze_frame(path, config=_config(), faces=[])
+        analysis = analyze_frame(path, config=_config(), boxes=[])
         assert analysis is not None
         write_frame_outputs(
             analysis,
@@ -228,7 +228,7 @@ def test_working_width_none_carves_at_source_resolution():
     from anime2manga.retarget import retarget_image
 
     image = _gradient(width=400, height=200)
-    analysis = retarget_image(image, config=_config(working_width=None), faces=[])
+    analysis = retarget_image(image, config=_config(working_width=None), boxes=[])
     assert analysis.working_size == (400, 200)
     assert analysis.trace.working_scale == 1.0
     carved = analysis.recommended_image
@@ -242,7 +242,7 @@ def test_working_width_at_or_above_source_does_not_resize():
     from anime2manga.retarget import retarget_image
 
     image = _gradient(width=160, height=90)
-    analysis = retarget_image(image, config=_config(working_width=9999), faces=[])
+    analysis = retarget_image(image, config=_config(working_width=9999), boxes=[])
     assert analysis.working_size == (160, 90)
 
 
@@ -250,7 +250,7 @@ def test_working_width_zero_is_treated_as_native():
     from anime2manga.retarget import retarget_image
 
     image = _gradient(width=160, height=90)
-    analysis = retarget_image(image, config=_config(working_width=0), faces=[])
+    analysis = retarget_image(image, config=_config(working_width=0), boxes=[])
     assert analysis.working_size == (160, 90)
 
 
@@ -262,23 +262,23 @@ def test_markdown_labels_native_working_width():
 
 def test_retarget_image_scales_full_resolution_faces():
     """Faces are detected at source resolution and must be scaled to the carve."""
-    from anime2manga.retarget import _scale_faces, retarget_image
+    from anime2manga.retarget import _scale_boxes, retarget_image
 
     face = FaceBox(100, 50, 200, 100)
-    scaled = _scale_faces([face], 0.5)
+    scaled = _scale_boxes([face], 0.5)
     assert (scaled[0].x, scaled[0].y, scaled[0].width, scaled[0].height) == (50, 25, 100, 50)
 
     # A 400x200 frame carved at 200px working width halves the box.  If the box
     # were used unscaled it would be clamped to the whole working image.
     image = np.full((200, 400, 3), 40, np.uint8)
-    analysis = retarget_image(image, config=_config(working_width=200), faces=[face])
+    analysis = retarget_image(image, config=_config(working_width=200), boxes=[face])
     assert analysis.working_size == (200, 100)
     assert 0 < analysis.trace.protected_total < 200 * 100 * 0.5
 
 
 def test_energy_threshold_matches_old_floor_at_defaults(tmp_path: Path):
     path = _write(tmp_path / "frame.png", _noise())
-    analysis = analyze_frame(path, config=_config(), faces=[])
+    analysis = analyze_frame(path, config=_config(), boxes=[])
     assert analysis is not None
     early = analysis.energy_early
     expected = max(0.35, 1.4 * early)
@@ -291,10 +291,10 @@ def test_lowering_energy_ratio_always_tightens(tmp_path: Path):
     # energy_ratio entirely.
     path = _write(tmp_path / "busy.png", _noise(seed=5))
     base = analyze_frame(
-        path, config=_config(energy_ratio=0.35, energy_baseline_multiple=1.4), faces=[]
+        path, config=_config(energy_ratio=0.35, energy_baseline_multiple=1.4), boxes=[]
     )
     lower = analyze_frame(
-        path, config=_config(energy_ratio=0.2, energy_baseline_multiple=1.4), faces=[]
+        path, config=_config(energy_ratio=0.2, energy_baseline_multiple=1.4), boxes=[]
     )
     assert base is not None and lower is not None
     assert base.energy_early > 0.25  # adaptive term is in play
@@ -304,7 +304,7 @@ def test_lowering_energy_ratio_always_tightens(tmp_path: Path):
 
 def test_summary_html_busts_browser_cache(tmp_path: Path):
     path = _write(tmp_path / "frame.png", _gradient())
-    analysis = analyze_frame(path, config=_config(), faces=[])
+    analysis = analyze_frame(path, config=_config(), boxes=[])
     assert analysis is not None
     record = summary_record(analysis)
     summary = write_summary(tmp_path / "out", [record], _config(), stamp="run-42")
@@ -315,7 +315,7 @@ def test_summary_html_busts_browser_cache(tmp_path: Path):
 
 def test_contact_sheet_and_plot_shapes(tmp_path: Path):
     path = _write(tmp_path / "frame.png", _noise())
-    analysis = analyze_frame(path, config=_config(), faces=[])
+    analysis = analyze_frame(path, config=_config(), boxes=[])
     assert analysis is not None
     sheet = contact_sheet(analysis, panel_width=200)
     assert sheet.shape[1] == 200

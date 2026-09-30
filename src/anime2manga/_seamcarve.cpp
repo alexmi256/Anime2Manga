@@ -3,7 +3,7 @@
 // This is the compiled backend behind `anime2manga.seam_carving.carve_width`.
 // It is a faithful port of the pure-Python engine in that module: L1 Sobel
 // gradient energy, Rubinstein/Shamir/Avidan forward energy, optional
-// face-hostile additive saliency, greedy vertical-seam removal, per-seam
+// detection-hostile additive saliency, greedy vertical-seam removal, per-seam
 // metrics, seam recording and snapshot capture.  Output is bit-identical to the
 // Python engine (see tests/test_seam_carving.py).
 //
@@ -171,16 +171,18 @@ void copy_with_stride(const uint8_t* src, uint8_t* dst, int h, int w, int stride
     }
 }
 
-// Boolean face mask, optionally dilated by OpenCV's MORPH_ELLIPSE kernel.
+// Boolean protected-content mask (face/head/person boxes), optionally dilated
+// by OpenCV's MORPH_ELLIPSE kernel.  The engine does not distinguish categories:
+// every box in the array is protected the same way.
 // Both the radius and the per-row half-width use round-half-to-even
 // (std::nearbyint) to match Python's `round()` and OpenCV's `cvRound`.
-void build_mask(int h, int w, const int* faces, int n_faces, double dilation, uint8_t* mask) {
+void build_mask(int h, int w, const int* boxes, int n_boxes, double dilation, uint8_t* mask) {
     std::memset(mask, 0, static_cast<size_t>(h) * w);
-    for (int f = 0; f < n_faces; ++f) {
-        int x0 = faces[f * 4 + 0];
-        int y0 = faces[f * 4 + 1];
-        int x1 = x0 + faces[f * 4 + 2];
-        int y1 = y0 + faces[f * 4 + 3];
+    for (int f = 0; f < n_boxes; ++f) {
+        int x0 = boxes[f * 4 + 0];
+        int y0 = boxes[f * 4 + 1];
+        int x1 = x0 + boxes[f * 4 + 2];
+        int y1 = y0 + boxes[f * 4 + 3];
         x0 = clamp_int(x0, 0, w);
         y0 = clamp_int(y0, 0, h);
         x1 = clamp_int(x1, 0, w);
@@ -189,7 +191,7 @@ void build_mask(int h, int w, const int* faces, int n_faces, double dilation, ui
             std::memset(mask + static_cast<size_t>(y) * w + x0, 1, x1 - x0);
         }
     }
-    if (n_faces == 0 || dilation <= 0.0) return;
+    if (n_boxes == 0 || dilation <= 0.0) return;
     const int radius =
         std::max(1, static_cast<int>(std::nearbyint(dilation * std::min(h, w))));
     std::vector<std::pair<int, int>> offsets;
@@ -259,9 +261,12 @@ typedef void (*seam_callback_t)(int k, const uint8_t* image, int height, int wid
 // Carve `src` down to `target_width`, returning the new width (or -1 on bad
 // input).  All outputs are optional except `dst`.
 //
-// `face_dilation`, `face_energy_factor` and `detail_quantile` are doubles: they
-// must not be truncated to float at the ABI, or mask saliency and the detail
+// `subject_dilation`, `subject_energy_factor` and `detail_quantile` are doubles:
+// they must not be truncated to float at the ABI, or mask saliency and the detail
 // threshold stop matching the Python engine.
+//
+// `boxes`/`n_boxes` carry every detected box (face, head or person); they are
+// all protected identically via the additive saliency below.
 //
 // `record_seams` writes the per-row column of every removed seam into
 // `seams_trace` (n_seams * height ints).
@@ -270,14 +275,14 @@ typedef void (*seam_callback_t)(int k, const uint8_t* image, int height, int wid
 // image is copied into `snapshots_buf` block `i` (each `height * width * 3`
 // bytes, row stride `width`) when `k / width0` first reaches it, and
 // `snapshot_widths[i]` is set to the width then (or left -1 if never reached).
-int carve_width_full(const uint8_t* src, int height, int width, int target_width, const int* faces,
-                     int n_faces, int protect_faces, double face_dilation, double face_energy_factor,
-                     double detail_quantile, int record_seams, int n_snapshots,
-                     const double* snapshot_ratios, uint8_t* snapshots_buf, int* snapshot_widths,
-                     uint8_t* dst, int* out_width, int* out_seams, int* seams_trace,
-                     SeamStepRaw* steps_out, double* out_base_energy, double* out_energy_sum0,
-                     long long* out_detail_total, long long* out_protected_total,
-                     seam_callback_t callback, void* user) {
+int carve_width_full(const uint8_t* src, int height, int width, int target_width, const int* boxes,
+                     int n_boxes, int protect_subjects, double subject_dilation,
+                     double subject_energy_factor, double detail_quantile, int record_seams,
+                     int n_snapshots, const double* snapshot_ratios, uint8_t* snapshots_buf,
+                     int* snapshot_widths, uint8_t* dst, int* out_width, int* out_seams,
+                     int* seams_trace, SeamStepRaw* steps_out, double* out_base_energy,
+                     double* out_energy_sum0, long long* out_detail_total,
+                     long long* out_protected_total, seam_callback_t callback, void* user) {
     if (!src || !dst || height < 1 || width < 1) return -1;
     for (int i = 0; i < n_snapshots; ++i) {
         if (snapshot_widths) snapshot_widths[i] = -1;
@@ -294,9 +299,9 @@ int carve_width_full(const uint8_t* src, int height, int width, int target_width
     float* mask_f = nullptr;
     std::vector<float> mask_f_buf;
     std::vector<float> mask_f_alt;
-    if (n_faces > 0) {
+    if (n_boxes > 0) {
         mask.resize(npix);
-        build_mask(height, width, faces, n_faces, face_dilation, mask.data());
+        build_mask(height, width, boxes, n_boxes, subject_dilation, mask.data());
         mask_f_buf.resize(npix);
         for (size_t i = 0; i < npix; ++i) mask_f_buf[i] = static_cast<float>(mask[i]);
         mask_f = mask_f_buf.data();
@@ -330,9 +335,19 @@ int carve_width_full(const uint8_t* src, int height, int width, int target_width
 
     // numpy promotes the Python-float scalar to float32 before multiplying the
     // mask, so compute the product in double and round once to float.
-    const float face_energy =
-        (protect_faces && mask_f)
-            ? static_cast<float>(face_energy_factor * static_cast<double>(base_energy))
+    //
+    // An over-large box (a near full-frame head on an extreme close-up) would
+    // put most of the frame under a 50x-saliency plateau, giving every seam the
+    // same cost and freezing the carve.  Rescale the penalty by the mask's
+    // share of the image so a whole-frame mask contributes only a constant
+    // offset; a small subject keeps the full factor.  Must match the Python
+    // engine (see ``seam_carving._subject_energy``).
+    const double protected_share =
+        (mask_f && npix > 0) ? static_cast<double>(protected_total) / static_cast<double>(npix) : 0.0;
+    const float subject_energy =
+        (protect_subjects && mask_f)
+            ? static_cast<float>(subject_energy_factor * (1.0 - protected_share) *
+                                 static_cast<double>(base_energy))
             : 0.0f;
 
     std::vector<uint8_t> other(npix * 3);
@@ -355,9 +370,9 @@ int carve_width_full(const uint8_t* src, int height, int width, int target_width
         forward_costs(gray.data(), height, cur_w, cL.data(), cU.data(), cR.data());
 
         const float* sal = nullptr;
-        if (mask_f && face_energy > 0.0f) {
+        if (mask_f && subject_energy > 0.0f) {
             saliency.resize(cur_npix);
-            for (size_t i = 0; i < cur_npix; ++i) saliency[i] = mask_f[i] * face_energy;
+            for (size_t i = 0; i < cur_npix; ++i) saliency[i] = mask_f[i] * subject_energy;
             sal = saliency.data();
         }
         find_seam(energy.data(), cL.data(), cU.data(), cR.data(), sal, height, cur_w, seam.data(),

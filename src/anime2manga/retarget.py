@@ -15,8 +15,9 @@ each with its own adjustable threshold, plus a weighted composite:
   the removal *introduces* (Rubinstein et al. 2008); when it climbs above the
   early, easy-shrink baseline, seams have begun to bend structure.
 * ``detail``    - budget on removed high-gradient ("detail") pixels and on
-  protected (face) pixels.  Faces are also energetically protected in the
-  engine, so the face budget is a safety net, not the primary trigger.
+  protected (face/head/person) pixels.  Those subjects are also energetically
+  protected in the engine, so the protected budget is a safety net, not the
+  primary trigger.
 * ``ssim``      - structural similarity between the carved image and the
   original uniformly scaled to the same size.  A cheap, principled stand-in for
   the bidirectional-similarity distortion of Simakov et al. (CVPR 2008); it
@@ -39,7 +40,9 @@ import numpy as np
 from skimage.metrics import structural_similarity
 
 from .faces import FaceDetectionConfig, detect_faces_in_image
-from .models import FaceBox
+from .heads import HeadDetectionConfig, detect_heads_in_image
+from .models import DetectionBox, FaceBox
+from .persons import PersonDetectionConfig, detect_persons_in_image
 from .seam_carving import CarveResult, SeamCarvingConfig, SeamStep, carve_width, reconstruct
 
 #: Names of the single-signal stopping rules, in report order.
@@ -82,8 +85,9 @@ class RetargetConfig:
     forward_knee_factor: float = 2.5
     #: ``detail``: fraction of original detail pixels that may be removed.
     detail_budget: float = 0.10
-    #: ``detail``: fraction of original face pixels that may be removed.
-    face_budget: float = 0.02
+    #: ``detail``: fraction of original subject (face/head/person) pixels that
+    #: may be removed.
+    subject_budget: float = 0.02
     #: ``ssim``: stop when structural similarity falls to this floor.  SSIM is
     #: informational by default because its absolute value depends on how busy
     #: the frame is; enable it for frames with large smooth regions.
@@ -111,8 +115,8 @@ class RetargetConfig:
     smoothing_window: float = 0.02
     #: Fraction of width used to establish the forward-energy warm-up baseline.
     warmup: float = 0.05
-    protect_faces: bool = True
-    face_energy_factor: float = 50.0
+    protect_subjects: bool = True
+    subject_energy_factor: float = 50.0
     #: Remove the thin green face boxes the pipeline draws onto frames before
     #: analysing (they are annotation, not content).  Skipped when green covers
     #: too much of the frame to be an overlay.
@@ -222,16 +226,16 @@ def _strip_green_overlay(image: np.ndarray) -> np.ndarray:
     return cv2.inpaint(image, grown, 3, cv2.INPAINT_TELEA)
 
 
-def _scale_faces(faces: list[FaceBox], scale: float) -> list[FaceBox]:
+def _scale_boxes(boxes: list[DetectionBox], scale: float) -> list[DetectionBox]:
     return [
-        FaceBox(
+        type(box)(
             x=round(box.x * scale),
             y=round(box.y * scale),
             width=round(box.width * scale),
             height=round(box.height * scale),
             confidence=box.confidence,
         )
-        for box in faces
+        for box in boxes
     ]
 
 
@@ -351,7 +355,7 @@ def _normalised_signals(trace: RetargetTrace, config: RetargetConfig) -> dict[st
             "forward": trace.added_cum_norm / (config.forward_knee_factor * forward_reference),
             "detail": np.maximum(
                 trace.cum_detail / max(config.detail_budget, 1e-9),
-                trace.cum_protected / max(config.face_budget, 1e-9),
+                trace.cum_protected / max(config.subject_budget, 1e-9),
             ),
             "ssim": (1.0 - trace.ssim) / max(1.0 - config.ssim_floor, 1e-9),
         }
@@ -398,7 +402,7 @@ def compute_limits(
         "detail",
         min(ratio, cap),
         hit,
-        f"detail removed >= {config.detail_budget:.0%} or faces >= {config.face_budget:.0%}",
+        f"detail removed >= {config.detail_budget:.0%} or subjects >= {config.subject_budget:.0%}",
     )
     ratio, hit = _first_fall(ratios, trace.ssim, config.ssim_floor)
     limits["ssim"] = MethodLimit("ssim", min(ratio, cap), hit, f"SSIM <= {config.ssim_floor:g}")
@@ -415,18 +419,43 @@ def compute_limits(
     return limits
 
 
+def detect_all_boxes(
+    image: np.ndarray,
+    *,
+    face: FaceDetectionConfig | None = None,
+    head: HeadDetectionConfig | None = None,
+    person: PersonDetectionConfig | None = None,
+) -> list[DetectionBox]:
+    """Detect faces, heads and persons and return the combined box list.
+
+    The seam carver protects every detected subject the same way, so the three
+    categories are merged into one list (the engine does not care which category
+    a box came from).
+    """
+    boxes = detect_faces_in_image(image, config=face)
+    boxes.extend(detect_heads_in_image(image, config=head))
+    boxes.extend(detect_persons_in_image(image, config=person))
+    return boxes
+
+
 def retarget_image(
     image: np.ndarray,
     *,
     config: RetargetConfig | None = None,
-    faces: list[FaceBox] | None = None,
+    boxes: list[DetectionBox] | None = None,
     face_config: FaceDetectionConfig | None = None,
+    protect_heads: bool = True,
+    protect_persons: bool = True,
+    head_config: HeadDetectionConfig | None = None,
+    person_config: PersonDetectionConfig | None = None,
 ) -> FrameAnalysis:
     """Carve an in-memory BGR frame down to the cap, recording quality signals.
 
-    ``faces`` should be the already-detected boxes when the caller has them (the
-    pipeline reuses step 8's detection so the model never runs twice); otherwise
-    the anime face model runs on the image.  The returned analysis carries a
+    The engine protects *every* detected subject, so when ``boxes`` is not given
+    the face, head and person models all run on the image.  A caller that already
+    has the pipeline's boxes passes them through ``boxes`` (the pipeline merges
+    all three categories); pass ``protect_heads=False`` / ``protect_persons=False``
+    to skip detecting those categories.  The returned analysis carries a
     placeholder ``path`` - use :func:`analyze_frame` for the disk entry point.
     Set ``config.working_width=None`` to carve at the source resolution instead
     of downscaling first.
@@ -437,8 +466,12 @@ def retarget_image(
         original = _strip_green_overlay(original)
     height0, width0 = original.shape[:2]
 
-    if faces is None:
-        faces = detect_faces_in_image(original, config=face_config)
+    if boxes is None:
+        boxes = detect_faces_in_image(original, config=face_config)
+        if protect_heads:
+            boxes.extend(detect_heads_in_image(original, config=head_config))
+        if protect_persons:
+            boxes.extend(detect_persons_in_image(original, config=person_config))
 
     if cfg.working_width is None or cfg.working_width <= 0:
         scale = 1.0
@@ -453,7 +486,7 @@ def retarget_image(
         # large as the source): carve the original pixels untouched.
         working = original
         work_w, work_h = width0, height0
-    work_faces = _scale_faces(faces, scale)
+    work_boxes = _scale_boxes(boxes, scale)
 
     target = max(1, round(work_w * (1.0 - cfg.max_shrink)))
     sample_ratios = tuple(
@@ -475,10 +508,10 @@ def retarget_image(
     carve_result = carve_width(
         working,
         target,
-        faces=work_faces,
+        boxes=work_boxes,
         config=SeamCarvingConfig(
-            protect_faces=cfg.protect_faces,
-            face_energy_factor=cfg.face_energy_factor,
+            protect_subjects=cfg.protect_subjects,
+            subject_energy_factor=cfg.subject_energy_factor,
         ),
         on_seam=on_seam,
         snapshot_ratios=snapshot_ratios,
@@ -504,7 +537,7 @@ def retarget_image(
         path=Path("<memory>"),
         original_size=(width0, height0),
         working_size=(work_w, work_h),
-        faces=list(faces),
+        faces=list(boxes),
         carve=carve_result,
         trace=trace,
         limits=limits,
@@ -522,19 +555,32 @@ def analyze_frame(
     path: Path,
     *,
     config: RetargetConfig | None = None,
-    faces: list[FaceBox] | None = None,
+    boxes: list[DetectionBox] | None = None,
     face_config: FaceDetectionConfig | None = None,
+    protect_heads: bool = True,
+    protect_persons: bool = True,
+    head_config: HeadDetectionConfig | None = None,
+    person_config: PersonDetectionConfig | None = None,
 ) -> FrameAnalysis | None:
     """Carve the frame at ``path`` down to the cap; ``None`` if unreadable.
 
-    ``faces`` overrides detection (useful for tests); otherwise the anime face
-    model runs on the full-resolution image and the boxes are scaled into the
-    working image.  Thin wrapper around :func:`retarget_image`.
+    ``boxes`` overrides detection (useful for tests); otherwise the face, head
+    and person models run on the full-resolution image and the boxes are scaled
+    into the working image.  Thin wrapper around :func:`retarget_image`.
     """
     path = Path(path)
     original = cv2.imread(str(path), cv2.IMREAD_COLOR)
     if original is None or original.size == 0:
         return None
-    analysis = retarget_image(original, config=config, faces=faces, face_config=face_config)
+    analysis = retarget_image(
+        original,
+        config=config,
+        boxes=boxes,
+        face_config=face_config,
+        protect_heads=protect_heads,
+        protect_persons=protect_persons,
+        head_config=head_config,
+        person_config=person_config,
+    )
     analysis.path = path
     return analysis

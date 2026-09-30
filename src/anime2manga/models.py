@@ -251,8 +251,13 @@ class Scene:
     #: right.  ``None`` when the source is mono/silent or has no audio.
     audio_balance_db: float | None = None
 
-    # --- Step 8: faces ----------------------------------------------------
-    faces: list[FaceBox] = field(default_factory=list)
+    # --- Step 8: detections -----------------------------------------------
+    #: Face boxes (used by cropping and seam carving).
+    faces: list[DetectionBox] = field(default_factory=list)
+    #: Head boxes (step 8).
+    heads: list[DetectionBox] = field(default_factory=list)
+    #: Full-body/person boxes (step 8).
+    persons: list[DetectionBox] = field(default_factory=list)
     #: Seam-carved version of :attr:`frame_path` (step 8b); ``None`` for
     #: panoramas or when seam carving is disabled.
     seam_carved_path: Path | None = None
@@ -287,9 +292,11 @@ class Scene:
 
 
 @dataclass(frozen=True)
-class FaceBox:
-    """A face bounding box in full-resolution frame pixels (step 8).
+class DetectionBox:
+    """A detector bounding box in full-resolution frame pixels (step 8).
 
+    Faces, heads and persons all use this box; the category is implied by the
+    :class:`Scene` list it is stored in (``faces`` / ``heads`` / ``persons``).
     ``confidence`` is the detector's score for the box (``0..1``); it is a
     relative strength, not a calibrated probability.
     """
@@ -303,6 +310,10 @@ class FaceBox:
     @property
     def area(self) -> int:
         return self.width * self.height
+
+
+#: Backwards-compatible alias: a face box is an ordinary :class:`DetectionBox`.
+FaceBox = DetectionBox
 
 
 @dataclass(frozen=True)

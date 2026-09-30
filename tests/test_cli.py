@@ -27,7 +27,14 @@ def test_parser_defaults():
     assert config.inpaint.method == "biharmonic"
     assert config.inpaint.quality == 92
     assert config.inpaint.max_pixels == 500_000
-    assert config.draw_face_boxes is True
+    assert config.draw_boxes is True
+    # Faces are off by default; heads and persons are on.
+    assert config.detect_face is False
+    assert config.detect_head is True
+    assert config.detect_person is True
+    assert config.draw_face_boxes is False
+    assert config.draw_head_boxes is True
+    assert config.draw_person_boxes is True
     assert config.detect_audio is True
     assert config.audio.balance_threshold_db == 1.5
     assert config.audio.silence_floor_db == -60.0
@@ -48,6 +55,42 @@ def test_seam_carve_working_width_zero_means_native():
         parser.parse_args(["video.mkv", "--seam-carve-working-width", "0"])
     )
     assert native.retarget.working_width is None
+
+
+def test_detection_and_box_toggles():
+    """Per-category toggles work, and ``--face-boxes`` stays a valid alias."""
+    parser = cli.build_parser()
+
+    all_off = cli.config_from_args(
+        parser.parse_args(
+            [
+                "video.mkv",
+                "--no-detect-face",
+                "--no-detect-head",
+                "--no-detect-person",
+                "--no-boxes",
+                "--no-head-bbox",
+                "--no-person-bbox",
+                "--no-face-bbox",
+            ]
+        )
+    )
+    assert all_off.detect_face is False
+    assert all_off.detect_head is False
+    assert all_off.detect_person is False
+    assert all_off.draw_boxes is False
+    assert all_off.draw_face_boxes is False
+    assert all_off.draw_head_boxes is False
+    assert all_off.draw_person_boxes is False
+
+    face_on = cli.config_from_args(parser.parse_args(["video.mkv", "--detect-face"]))
+    assert face_on.detect_face is True
+
+    # ``--face-boxes`` is still accepted as an alias for ``--boxes``.
+    assert (
+        cli.config_from_args(parser.parse_args(["video.mkv", "--no-face-boxes"])).draw_boxes
+        is False
+    )
 
 
 def test_parser_overrides():
@@ -108,7 +151,7 @@ def test_parser_overrides():
     assert config.inpaint.enabled is False
     assert config.inpaint.quality == 80
     assert config.inpaint.max_pixels == 200000
-    assert config.draw_face_boxes is False
+    assert config.draw_boxes is False
     assert config.detect_audio is False
     assert config.audio.balance_threshold_db == 2.5
     assert config.audio.silence_floor_db == -70.0
