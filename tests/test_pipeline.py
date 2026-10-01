@@ -341,6 +341,44 @@ def test_step8_detections_attaches_boxes_and_annotates(tmp_path, monkeypatch):
     assert drawn == [[("face", [face]), ("head", [head]), ("person", [person])]]
 
 
+def test_step8_detections_compute_subject_composition(tmp_path, monkeypatch):
+    frame = tmp_path / "frame.png"
+    cv2.imwrite(str(frame), np.zeros((100, 100, 3), np.uint8))
+    scene = Scene(index=1, start=0.0, end=1.0, fps=24.0)
+    scene.frame_path = frame
+    scene.frame_size = (100, 100)
+    pipeline = _face_pipeline(tmp_path)
+    pipeline.scenes = [scene]
+
+    person = FaceBox(10, 0, 30, 100)
+    head = FaceBox(15, 5, 10, 10)
+    _patch_detectors(monkeypatch, heads=[head], persons=[person])
+    _patch_annotate(monkeypatch, [])
+
+    pipeline._step8_detections()
+
+    assert scene.composition is not None
+    assert scene.composition.body_percent == 30.0
+    assert scene.composition.head_percent == 1.0
+    assert scene.composition.heads_in_body is True
+    assert scene.composition.body_leans == "left"
+
+
+def test_step8_composition_skipped_without_frame_size(tmp_path, monkeypatch):
+    frame = tmp_path / "frame.png"
+    cv2.imwrite(str(frame), np.zeros((100, 100, 3), np.uint8))
+    scene = Scene(index=1, start=0.0, end=1.0, fps=24.0)
+    scene.frame_path = frame  # frame_size deliberately left None
+    pipeline = _face_pipeline(tmp_path)
+    pipeline.scenes = [scene]
+    _patch_detectors(monkeypatch, heads=[FaceBox(1, 1, 2, 2)])
+    _patch_annotate(monkeypatch, [])
+
+    pipeline._step8_detections()
+
+    assert scene.composition is None
+
+
 def test_step8_faces_disabled_by_default(tmp_path, monkeypatch):
     """``detect_face`` defaults off so the face model never runs unasked."""
     frame = tmp_path / "frame.png"

@@ -48,6 +48,8 @@ Runtime dependencies are deliberately small: `numpy`, `opencv-python`,
   - `models.py` — shared dataclasses (`Scene`, `DetectionBox`/`FaceBox`, `PipelineResult`, …).
   - `report.py` — `report.md` and `scenes.json` writers.
   - `metadata.py`, `subtitles.py`, `scene_detect.py`, `panorama.py`, `inpaint.py`, `timeline.py`, `frames.py`, `audio.py`, `faces.py`, `heads.py`, `persons.py` — pipeline stages.
+  - `composition.py` — per-frame subject composition metrics (body/head percent,
+    overlap, head-in-body containment, lean) computed from the detection boxes.
   - `detection.py` — the shared single-class YOLOv8 engine (letterbox, multi-scale decode, NMS, coloured drawing) used by `faces`/`heads`/`persons`.
   - `cropping.py`, `text_layout.py`, `translation.py`, `motion_vectors.py` — stubs.
   - `seam_carving.py` — content-aware retargeting engine (step 8b / standalone); `_seamcarve.cpp` — its native C++ backend (built by `setup.py`, driven through `ctypes`); `retarget.py` — the retarget metrics.
@@ -91,6 +93,14 @@ detected boxes (every enabled category) so the models never run twice.
 Panoramic scenes are never seam-carved. Faces, heads and persons are drawn in
 distinct colours (green / blue / red) and are listed under
 `Face`/`Head`/`Person Bounding Boxes:` in the report.
+
+Step 8 also derives `Scene.composition` (`composition.py`): body/head percent of
+frame (union of person/head boxes), body–head overlap percent, head-in-body
+containment, and a `left`/`middle`/`right` lean per category. These are
+**observational diagnostics** and must stay out of the carve/crop decisions:
+they are report-only, and are only well-defined for single-subject frames.
+They appear in `report.md` (`## Subject Composition`) and `scenes.json`
+(`composition`), plus the experiment's summary outputs.
 
 `scenes.json` is machine-readable and must stay in sync with `report.md`.
 

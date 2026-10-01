@@ -17,6 +17,14 @@ class SceneMethod(StrEnum):
     SCDET = "scdet"
 
 
+class FrameLean(StrEnum):
+    """Which horizontal third of the frame a subject sits in (step 8)."""
+
+    LEFT = "left"
+    MIDDLE = "middle"
+    RIGHT = "right"
+
+
 @dataclass(frozen=True)
 class TimeRange:
     """A half-open time span ``[start, end)`` in seconds."""
@@ -265,6 +273,9 @@ class Scene:
     seam_carve_shrink: float | None = None
     #: ``(width, height)`` of the seam-carved frame.
     seam_carve_size: tuple[int, int] | None = None
+    #: How the detected bodies (persons) and heads occupy the frame (step 8).
+    #: Observational only - it never feeds cropping or seam carving.
+    composition: FrameComposition | None = None
 
     # --- Planned stages (stubs); kept typed so downstream code can rely on
     #     them without a schema migration. -----------------------------------
@@ -314,6 +325,40 @@ class DetectionBox:
 
 #: Backwards-compatible alias: a face box is an ordinary :class:`DetectionBox`.
 FaceBox = DetectionBox
+
+
+@dataclass(frozen=True)
+class FrameComposition:
+    """How detected bodies and heads occupy one frame (step 8).
+
+    Produced by :func:`anime2manga.composition.analyze_composition` from the
+    person (body) and head boxes plus the frame size.  All percentages are
+    ``0..100`` and use the *union* of a category's boxes, so overlapping
+    detections are not double-counted.
+
+    Caveat: these numbers are observational.  They are deliberately **not**
+    wired into cropping (step 9) or seam carving (step 8b) - neither the body
+    nor the head fraction is a good saliency signal on its own.  They are also
+    only well-defined for a frame with a single body/head; with several
+    detections the percentages cover the union of boxes and the lean is the
+    combined bounding-box centre.
+    """
+
+    #: ``(width, height)`` of the frame the boxes are expressed in.
+    frame_size: tuple[int, int]
+    #: Percent of the frame covered by the union of body (person) boxes.
+    body_percent: float
+    #: Percent of the frame covered by the union of head boxes.
+    head_percent: float
+    #: Percent of the frame covered by both a body and a head box.
+    body_head_overlap_percent: float
+    #: True when every detected head lies fully inside the body region;
+    #: ``None`` when no head was detected, ``False`` when heads exist but no body.
+    heads_in_body: bool | None
+    #: Horizontal third the body region sits in; ``None`` when no body.
+    body_leans: FrameLean | None
+    #: Horizontal third the head region sits in; ``None`` when no head.
+    head_leans: FrameLean | None
 
 
 @dataclass(frozen=True)

@@ -94,6 +94,7 @@ a video with no subtitles fails with a clear message.
 | 6. Frame sampling and clearest-frame selection | `frames.py` | implemented |
 | 7. Left/right audio focus | `audio.py` | implemented |
 | 8. Face, head and person detection, optional bounding boxes on chosen frames | `detection.py`, `faces.py`, `heads.py`, `persons.py` | implemented |
+| 8a. Subject composition metrics (body/head percent, overlap, lean) | `composition.py` | implemented |
 | 8b. Seam-carve a copy of each regular frame (`--seam-carve`) | `seam_carving.py`, `retarget.py` | implemented |
 | 9. Face-aware cropping | `cropping.py` | stub |
 | 10. Text/bubble placement | `text_layout.py` | stub |
@@ -259,6 +260,35 @@ missed, and decorative patterns that resemble a face (e.g. skull ornaments) can
 occasionally produce a false positive.  Raise `score_threshold` to trade recall
 for precision, or adjust `content_scales`.
 
+## How subject composition is measured
+
+Every frame also gets a `## Subject Composition` block built from its person
+(bodies) and head boxes by `composition.py`.  The computation is box-only and
+pure, so it costs nothing measurable and is trivial to test:
+
+| Report line | Meaning |
+| ----------- | ------- |
+| `Body Percent of Frame` | Share of the frame covered by the **union** of person boxes. |
+| `Head Percent of Frame` | Share of the frame covered by the union of head boxes. |
+| `Body and Head Overlap Percent` | Share of the frame covered by both a body and a head box. |
+| `Heads Contained in Body` | Whether every head box lies fully inside the union of body boxes (`n/a` with no heads). |
+| `Body Leans Towards` | `Left`, `Middle` or `Right` third containing the body region (`None` when no body). |
+| `Head Leans Towards` | Same for the head region (`None` when no head). |
+
+The same numbers are written to `scenes.json` under each scene's `composition`
+object, and the seam-carving experiment's `summary.csv` / `summary.json` /
+`report.md` / `report.html` carry them too.
+
+> **Caveat - these are observational diagnostics.**  They describe where the
+> detected subjects sit; they deliberately do **not** influence cropping (step 9)
+> or seam carving (step 8b).  A body/head percentage is a poor saliency signal on
+> its own (a large flat body needs far less protection than a small detailed
+> face) and a "lean" is a description, not a composition rule.  They are also
+> only well-defined for a frame with a single body/head: with several detections
+> the percentages are the **union** of the boxes (so they never exceed 100%) and
+> the lean uses the combined bounding-box centre, so two subjects on opposite
+> sides read as `Middle`.
+
 ## How much can a frame be seam-carved before it looks bad?
 
 A 16:9 frame that must sit in a portrait manga panel cannot always be cropped:
@@ -340,6 +370,8 @@ Running the pipeline prints, and logs to `output/scenes.json`:
 * per-scene pan direction, shift, consistency, response and panorama size,
 * the absolute start/end of each detected pan segment,
 * chosen frame time, sharpness, subtitle count and detected face count,
+* per-scene subject composition (body/head percent of frame, overlap,
+  head-in-body containment and lean),
 * per-scene audio direction and channel balance in dB, plus a
   `left=… center=… right=…` summary.
 
@@ -387,6 +419,14 @@ Head Bounding Boxes:
 - x=639, y=0, width=1280, height=1080, confidence=0.57
 Person Bounding Boxes:
 - x=25, y=4, width=1300, height=1070, confidence=0.37
+
+## Subject Composition
+Body Percent of Frame: 66.0%
+Head Percent of Frame: 32.0%
+Body and Head Overlap Percent: 32.0%
+Heads Contained in Body: Yes
+Body Leans Towards: Middle
+Head Leans Towards: Middle
 
 ## Text
 - What? Two death's heads again?

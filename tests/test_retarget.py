@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import csv
+import json
 from pathlib import Path
 from typing import Any
 
@@ -339,3 +341,114 @@ def test_markdown_lists_every_frame():
         )
     markdown = render_markdown(records, _config())
     assert "scene_0001" in markdown and "scene_0002" in markdown
+
+
+def test_retarget_image_computes_composition_from_detected_categories(monkeypatch):
+    from anime2manga import retarget as retarget_module
+
+    image = np.full((100, 100, 3), 50, np.uint8)
+    monkeypatch.setattr(retarget_module, "detect_faces_in_image", lambda *a, **k: [])
+    monkeypatch.setattr(
+        retarget_module, "detect_heads_in_image", lambda *a, **k: [FaceBox(15, 10, 20, 20)]
+    )
+    monkeypatch.setattr(
+        retarget_module,
+        "detect_persons_in_image",
+        lambda *a, **k: [FaceBox(10, 0, 40, 100)],
+    )
+
+    analysis = retarget_module.retarget_image(image, config=_config())
+    assert analysis.composition is not None
+    assert analysis.composition.body_percent == 40.0
+    assert analysis.composition.head_percent == 4.0
+    assert analysis.composition.heads_in_body is True
+    assert analysis.composition.body_leans == "left"
+    # The per-category boxes are retained alongside the merged protective mask.
+    assert analysis.heads == [FaceBox(15, 10, 20, 20)]
+    assert analysis.persons == [FaceBox(10, 0, 40, 100)]
+
+
+def test_retarget_composition_is_none_when_boxes_are_supplied():
+    from anime2manga.retarget import retarget_image
+
+    image = np.full((100, 100, 3), 50, np.uint8)
+    analysis = retarget_image(image, config=_config(), boxes=[FaceBox(10, 0, 40, 100)])
+    # Categories are unknown when the caller merges the boxes, so no composition.
+    assert analysis.composition is None
+    assert analysis.heads == []
+    assert analysis.persons == []
+
+
+def test_summary_record_includes_composition():
+    from anime2manga.retarget import retarget_image
+
+    image = np.full((100, 100, 3), 50, np.uint8)
+    analysis = retarget_image(image, config=_config(), boxes=[])
+    record = summary_record(analysis)
+    assert "body_percent" in record
+    assert record["body_percent"] is None  # no categories detected
+
+
+def test_write_summary_persists_composition_columns(tmp_path, monkeypatch):
+    """The new columns survive the real CSV/JSON write, not just the record."""
+    from anime2manga import retarget as retarget_module
+
+    image = np.full((100, 100, 3), 50, np.uint8)
+    monkeypatch.setattr(retarget_module, "detect_faces_in_image", lambda *a, **k: [])
+    monkeypatch.setattr(
+        retarget_module, "detect_heads_in_image", lambda *a, **k: [FaceBox(15, 10, 20, 20)]
+    )
+    monkeypatch.setattr(
+        retarget_module,
+        "detect_persons_in_image",
+        lambda *a, **k: [FaceBox(10, 0, 40, 100)],
+    )
+    analysis = retarget_module.retarget_image(image, config=_config())
+    summary = write_summary(
+        tmp_path / "out", [summary_record(analysis)], _config(), stamp="run-1"
+    )
+
+    with Path(summary["csv"]).open(newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+    assert rows[0]["body_percent"] == "40.0"
+    assert rows[0]["head_percent"] == "4.0"
+    assert rows[0]["overlap_percent"] == "4.0"
+    assert rows[0]["heads_in_body"] == "True"
+    assert rows[0]["body_lean"] == "left"
+    assert rows[0]["head_lean"] == "left"
+
+    payload = json.loads(Path(summary["json"]).read_text(encoding="utf-8"))
+    frame = payload["frames"][0]
+    assert frame["body_percent"] == 40.0
+    assert frame["head_percent"] == 4.0
+    assert frame["heads_in_body"] is True
+    assert frame["body_lean"] == "left"
+
+
+def test_markdown_renders_composition_columns():
+    record = {
+        "name": "scene_0001",
+        "faces": 2,
+        "energy_ratio": 0.2,
+        "energy_threshold": 0.31,
+        "forward_ratio": 0.5,
+        "detail_ratio": 0.4,
+        "ssim_ratio": 0.1,
+        "composite_ratio": 0.2,
+        "body_percent": 30.0,
+        "head_percent": 4.0,
+        "overlap_percent": 4.0,
+        "heads_in_body": True,
+        "body_lean": "left",
+        "head_lean": "middle",
+    }
+    markdown = render_markdown([record], _config())
+    assert "Body%" in markdown
+    assert "30.0%" in markdown
+    assert "4.0%" in markdown
+    assert "yes" in markdown
+    assert "Left" in markdown and "Middle" in markdown
+
+    html = render_html([record], _config())
+    assert "Body%" in html and "Head lean" in html
+    assert "30.0%" in html

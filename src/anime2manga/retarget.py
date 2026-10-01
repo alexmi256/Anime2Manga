@@ -39,9 +39,10 @@ import cv2
 import numpy as np
 from skimage.metrics import structural_similarity
 
+from .composition import analyze_composition
 from .faces import FaceDetectionConfig, detect_faces_in_image
 from .heads import HeadDetectionConfig, detect_heads_in_image
-from .models import DetectionBox, FaceBox
+from .models import DetectionBox, FaceBox, FrameComposition
 from .persons import PersonDetectionConfig, detect_persons_in_image
 from .seam_carving import CarveResult, SeamCarvingConfig, SeamStep, carve_width, reconstruct
 
@@ -173,6 +174,10 @@ class FrameAnalysis:
     path: Path
     original_size: tuple[int, int]
     working_size: tuple[int, int]
+    #: Every detected subject (faces, heads and persons) merged into the one
+    #: protective mask.  Kept under its historical name; the per-category boxes
+    #: live in :attr:`heads` / :attr:`persons` (empty when a caller passed
+    #: ``boxes`` directly, since those are already merged).
     faces: list[FaceBox]
     carve: CarveResult
     trace: RetargetTrace
@@ -189,6 +194,13 @@ class FrameAnalysis:
     energy_early: float = 0.0
     #: Effective ``removed_norm`` threshold the energy guard actually used.
     energy_threshold: float = 0.0
+    #: Heads detected on the frame (empty when categorisation is unavailable).
+    heads: list[DetectionBox] = field(default_factory=list)
+    #: Persons/bodies detected on the frame (empty when unavailable).
+    persons: list[DetectionBox] = field(default_factory=list)
+    #: Subject composition metrics; ``None`` when ``boxes`` were passed in and
+    #: the categories are therefore unknown.  Observational only.
+    composition: FrameComposition | None = None
 
     @property
     def name(self) -> str:
@@ -466,12 +478,20 @@ def retarget_image(
         original = _strip_green_overlay(original)
     height0, width0 = original.shape[:2]
 
+    heads: list[DetectionBox] = []
+    persons: list[DetectionBox] = []
+    composition: FrameComposition | None = None
     if boxes is None:
         boxes = detect_faces_in_image(original, config=face_config)
         if protect_heads:
-            boxes.extend(detect_heads_in_image(original, config=head_config))
+            # Keep the categories separate so the report can describe the
+            # composition; the carve itself only needs the merged ``boxes``.
+            heads = detect_heads_in_image(original, config=head_config)
+            boxes.extend(heads)
         if protect_persons:
-            boxes.extend(detect_persons_in_image(original, config=person_config))
+            persons = detect_persons_in_image(original, config=person_config)
+            boxes.extend(persons)
+        composition = analyze_composition((width0, height0), persons, heads)
 
     if cfg.working_width is None or cfg.working_width <= 0:
         scale = 1.0
@@ -548,6 +568,9 @@ def retarget_image(
         recommended_image=recommended_image,
         energy_early=energy_early,
         energy_threshold=energy_threshold,
+        heads=heads,
+        persons=persons,
+        composition=composition,
     )
 
 

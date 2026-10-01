@@ -10,7 +10,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from .models import DetectionBox, PipelineResult, Scene
+from .composition import lean_label
+from .models import DetectionBox, FrameComposition, PipelineResult, Scene
 
 
 def format_time(seconds: float) -> str:
@@ -61,6 +62,12 @@ def build_markdown(result: PipelineResult) -> str:
     )
     lines.append(f"Scene Count: {len(result.scenes)}")
     lines.append("")
+    lines.append(
+        "Subject composition metrics are observational: they describe where the "
+        "detected bodies and heads sit and never affect seam carving or cropping. "
+        "They are most reliable when a frame has a single body and head."
+    )
+    lines.append("")
 
     for scene in result.scenes:
         lines.extend(_render_scene(scene, base))
@@ -81,6 +88,32 @@ def _detection_lines(label: str, boxes, *, has_frame: bool, empty: str) -> list[
             )
     else:
         out.append(f"- (no {empty} detected)")
+    return out
+
+
+def _yes_no(value: bool | None) -> str:
+    """Render a tri-state containment flag (``None`` is not applicable)."""
+    if value is None:
+        return "n/a"
+    return "Yes" if value else "No"
+
+
+def _composition_lines(scene: Scene) -> list[str]:
+    """Render the step 8 subject composition block for one scene."""
+    out = ["## Subject Composition"]
+    composition = scene.composition
+    if composition is None:
+        out.append("- (not computed)")
+        return out
+    out.append(f"Body Percent of Frame: {composition.body_percent:.1f}%")
+    out.append(f"Head Percent of Frame: {composition.head_percent:.1f}%")
+    out.append(
+        "Body and Head Overlap Percent: "
+        f"{composition.body_head_overlap_percent:.1f}%"
+    )
+    out.append(f"Heads Contained in Body: {_yes_no(composition.heads_in_body)}")
+    out.append(f"Body Leans Towards: {lean_label(composition.body_leans)}")
+    out.append(f"Head Leans Towards: {lean_label(composition.head_leans)}")
     return out
 
 
@@ -134,6 +167,8 @@ def _render_scene(scene: Scene, base: Path) -> list[str]:
         _detection_lines("Person", scene.persons, has_frame=has_frame, empty="persons")
     )
     lines.append("")
+    lines.extend(_composition_lines(scene))
+    lines.append("")
     lines.append("## Text")
     if scene.subtitles:
         for subtitle in scene.subtitles:
@@ -163,6 +198,21 @@ def _boxes(boxes: list[DetectionBox]) -> list[dict]:
         }
         for box in boxes
     ]
+
+
+def _composition_dict(composition: FrameComposition | None) -> dict | None:
+    """Serialise a frame's subject composition for ``scenes.json``."""
+    if composition is None:
+        return None
+    return {
+        "frame_size": list(composition.frame_size),
+        "body_percent": composition.body_percent,
+        "head_percent": composition.head_percent,
+        "body_head_overlap_percent": composition.body_head_overlap_percent,
+        "heads_in_body": composition.heads_in_body,
+        "body_leans": composition.body_leans.value if composition.body_leans else None,
+        "head_leans": composition.head_leans.value if composition.head_leans else None,
+    }
 
 
 def scene_to_dict(scene: Scene) -> dict:
@@ -213,6 +263,7 @@ def scene_to_dict(scene: Scene) -> dict:
         "faces": _boxes(scene.faces),
         "heads": _boxes(scene.heads),
         "persons": _boxes(scene.persons),
+        "composition": _composition_dict(scene.composition),
         "subtitle_count": len(scene.subtitles),
         "subtitles": [
             {"start": round(s.start, 3), "end": round(s.end, 3), "text": s.text}

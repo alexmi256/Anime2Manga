@@ -34,6 +34,7 @@ import cv2
 
 from . import audio, detection, faces, heads, persons
 from .audio import AudioFocusConfig
+from .composition import analyze_composition
 from .errors import Anime2MangaError
 from .faces import FaceDetectionConfig
 from .ffmpeg_utils import require_tools
@@ -706,6 +707,12 @@ class Pipeline:
                         f"{len(scene.heads)} head(s), {len(scene.persons)} person(s)"
                     )
                 self._warn_oversized_detections(scene)
+                if scene.frame_size is not None:
+                    # Pure, box-only report diagnostics; never fed back into the
+                    # carve or a crop (see ``composition``'s caveat).
+                    scene.composition = analyze_composition(
+                        scene.frame_size, scene.persons, scene.heads
+                    )
             self.log(
                 f"detections: faces={face_count} heads={head_count} persons={person_count}"
             )
