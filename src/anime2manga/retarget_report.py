@@ -23,6 +23,9 @@ import numpy as np
 
 from .retarget import METHODS, FrameAnalysis, RetargetConfig
 
+#: Human-facing labels for a stored frame lean.
+_LEAN_LABELS = {"left": "Left", "middle": "Middle", "right": "Right"}
+
 #: Line colour per signal in the SVG plots.
 SIGNAL_COLORS: dict[str, str] = {
     "energy": "#e4572e",
@@ -200,6 +203,26 @@ def summary_record(analysis: FrameAnalysis) -> dict[str, Any]:
         record[f"{method}_ratio"] = round(limit.ratio, 4) if limit else 0.0
     composite = limits.get("composite")
     record["composite_ratio"] = round(composite.ratio, 4) if composite else 0.0
+    # Subject composition (observational; see ``anime2manga.composition``).  The
+    # category boxes come from the experiment's own detection pass, so these are
+    # ``None`` when a caller passed ``boxes`` in directly.
+    composition = analysis.composition
+    record["body_percent"] = composition.body_percent if composition else None
+    record["head_percent"] = composition.head_percent if composition else None
+    record["overlap_percent"] = (
+        composition.body_head_overlap_percent if composition else None
+    )
+    record["heads_in_body"] = composition.heads_in_body if composition else None
+    record["body_lean"] = (
+        composition.body_leans.value
+        if composition and composition.body_leans
+        else None
+    )
+    record["head_lean"] = (
+        composition.head_leans.value
+        if composition and composition.head_leans
+        else None
+    )
     return record
 
 
@@ -284,6 +307,20 @@ def _fmt(value: float) -> str:
     return f"{value * 100:.0f}%"
 
 
+def _pct_or_dash(value: float | None) -> str:
+    return f"{value:.1f}%" if value is not None else "-"
+
+
+def _lean_or_dash(value: str | None) -> str:
+    return _LEAN_LABELS.get(value, "-") if value else "-"
+
+
+def _bool_or_dash(value: bool | None) -> str:
+    if value is None:
+        return "-"
+    return "yes" if value else "no"
+
+
 def _natural_key(name: str) -> list[tuple[int, object]]:
     """Sort ``scene_2`` before ``scene_10`` (numeric, not lexicographic)."""
     return [(0, int(part)) if part.isdigit() else (1, part) for part in re.split(r"(\d+)", name)]
@@ -313,12 +350,26 @@ def render_markdown(records: list[dict[str, Any]], config: RetargetConfig) -> st
         "`E thr` is the effective energy threshold the frame actually used; when it "
         "is above the energy ratio, the adaptive floor is governing that frame.",
         "",
-        "| Frame | Faces | Energy | E thr | Forward | Detail | Structural | **COMP** |",
-        "| ----- | ----: | -----: | ----: | ------: | -----: | ---------: | -------: |",
+        "Subject columns (`Body%`/`Head%`/`Overlap%`/`In body`/`Body lean`/"
+        "`Head lean`) are observational frame diagnostics and never feed the carve; "
+        "`-` means the category was not detected. They are most reliable for "
+        "single-subject frames (see `anime2manga.composition`).",
+        "",
+        "| Frame | Faces | Body% | Head% | Overlap% | In body | Body lean | Head lean "
+        "| Energy | E thr | Forward | Detail | Structural | **COMP** |",
+        "| ----- | ----: | ----: | ----: | -------: | :-----: | :-------- | :-------- "
+        "| -----: | ----: | ------: | -----: | ---------: | -------: |",
     ]
     for row in records:
         lines.append(
-            f"| {row['name']} | {row['faces']} | {_fmt(row['energy_ratio'])} | "
+            f"| {row['name']} | {row['faces']} | "
+            f"{_pct_or_dash(row.get('body_percent'))} | "
+            f"{_pct_or_dash(row.get('head_percent'))} | "
+            f"{_pct_or_dash(row.get('overlap_percent'))} | "
+            f"{_bool_or_dash(row.get('heads_in_body'))} | "
+            f"{_lean_or_dash(row.get('body_lean'))} | "
+            f"{_lean_or_dash(row.get('head_lean'))} | "
+            f"{_fmt(row['energy_ratio'])} | "
             f"{row.get('energy_threshold', 0.0):.3f} | "
             f"{_fmt(row['forward_ratio'])} | {_fmt(row['detail_ratio'])} | "
             f"{_fmt(row['ssim_ratio'])} | **{_fmt(row['composite_ratio'])}** |"
@@ -348,6 +399,12 @@ def render_html(
             f'<td><a href="#{name}">{name}</a></td>'
             f'<td><img loading="lazy" src="thumbs/{name}.jpg{query}" height="54"></td>'
             f"<td>{row['faces']}</td>"
+            f"<td>{_pct_or_dash(row.get('body_percent'))}</td>"
+            f"<td>{_pct_or_dash(row.get('head_percent'))}</td>"
+            f"<td>{_pct_or_dash(row.get('overlap_percent'))}</td>"
+            f"<td>{_bool_or_dash(row.get('heads_in_body'))}</td>"
+            f"<td>{_lean_or_dash(row.get('body_lean'))}</td>"
+            f"<td>{_lean_or_dash(row.get('head_lean'))}</td>"
             f"<td>{_fmt(row['energy_ratio'])}</td>"
             f"<td>{row.get('energy_threshold', 0.0):.3f}</td>"
             f"<td>{_fmt(row['forward_ratio'])}</td>"
@@ -364,7 +421,9 @@ def render_html(
         sections.append(
             f'<details id="{name}"><summary>{name} '
             f'<span class="rec">stop at {_fmt(row["composite_ratio"])} '
-            f"&middot; energy threshold {threshold:.3f}</span></summary>"
+            f"&middot; energy threshold {threshold:.3f} "
+            f"&middot; body {_pct_or_dash(row.get('body_percent'))} "
+            f"&middot; head {_pct_or_dash(row.get('head_percent'))}</span></summary>"
             f'<img loading="lazy" class="sheet" src="{contacts_dir_name}/{name}.jpg{query}">'
             f'<img loading="lazy" class="plot" src="{plots_dir_name}/{name}.svg{query}">'
             "</details>"
@@ -397,6 +456,12 @@ def render_html(
         "Click to jump to its contact strip and signal plot.</td></tr>"
         "<tr><td>Stop preview</td><td>The frame carved to <b>COMP</b> (the recommended shrink).</td></tr>"
         "<tr><td>Faces</td><td>Subjects detected (faces, heads and persons share one protective mask). Drives the energetic mask and the subject budget.</td></tr>"
+        "<tr><td>Body% / Head%</td><td>Percent of the frame covered by the union of "
+        "person / head boxes. <b>Observational</b> &mdash; it never feeds the carve, and "
+        "it is most reliable for single-subject frames. <code>-</code> = not detected.</td></tr>"
+        "<tr><td>Overlap%</td><td>Percent of the frame covered by both a body and a head box.</td></tr>"
+        "<tr><td>In body</td><td>Whether every detected head lies fully inside the body region.</td></tr>"
+        "<tr><td>Body lean / Head lean</td><td>Which horizontal third the body / head region sits in (Left/Middle/Right).</td></tr>"
         "<tr><td>Energy</td><td>Where the energy guard trips: the removed seam's energy reaches "
         "<b>E thr</b> as low-detail seams run out.</td></tr>"
         "<tr><td>E thr</td><td>Effective energy threshold actually used, in units of the image's "
@@ -423,6 +488,8 @@ def render_html(
         f"&middot; detail {_fmt(config.detail_budget)} &middot; subject {_fmt(config.subject_budget)}</p>"
         + guide
         + "<table><thead><tr><th>Frame</th><th>Stop preview</th><th>Faces</th>"
+        "<th>Body%</th><th>Head%</th><th>Overlap%</th><th>In body</th>"
+        "<th>Body lean</th><th>Head lean</th>"
         "<th>Energy</th><th>E thr</th><th>Forward</th><th>Detail</th>"
         "<th>Structural</th><th>COMP</th>"
         "</tr></thead><tbody>"

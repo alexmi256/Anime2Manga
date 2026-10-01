@@ -220,6 +220,11 @@ enabled, so you can compare candidates.
 | --- | --- |
 | `name` | Frame name (e.g. `scene_0120`), i.e. the source still. |
 | `faces` | Subjects detected in the frame (faces, heads and persons all merge into one protective mask).  Drives the energetic mask and the `subject` budget. `0` means none. |
+| `body_percent` | Percent of the frame covered by the union of **person (body)** boxes.  Observational only - it never feeds the carve.  `""` (blank) when the caller passed pre-merged `boxes` so categories are unknown.  Most reliable for single-subject frames. |
+| `head_percent` | Percent of the frame covered by the union of **head** boxes.  Same caveats as `body_percent`. |
+| `overlap_percent` | Percent of the frame covered by both a body and a head box (intersection of the two unions). |
+| `heads_in_body` | Whether every detected head lies fully inside the body region; blank when unknown, `false` when there are heads but no body. |
+| `body_lean` / `head_lean` | `left`/`middle`/`right` horizontal third the body / head region sits in; blank when that category was not detected. |
 | `working_size` | `[width, height]` the frame was analysed/carved at (source size when `working_width` is `None`, otherwise after scaling to `working_width`). |
 | `base_energy` | Mean gradient energy of the working image (arbitrary units); the denominator for `energy`. |
 | `energy_early` | The frame's own easy-seam energy at the end of the warm-up window, in units of `base_energy`.  High = detailed everywhere.  Feeds the adaptive margin. |
