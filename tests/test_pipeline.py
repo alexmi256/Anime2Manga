@@ -427,6 +427,87 @@ def test_step8_detections_skip_when_all_disabled(tmp_path, monkeypatch):
     assert scene.persons == []
 
 
+def test_step9_layout_writes_clean_index(tmp_path):
+    frame = tmp_path / "frame.png"
+    cv2.imwrite(str(frame), np.zeros((90, 160, 3), np.uint8))
+    scene = Scene(index=1, start=0.0, end=1.0, fps=24.0)
+    scene.frame_path = frame
+    scene.frame_size = (160, 90)
+    scene.heads = [FaceBox(60, 30, 20, 20, 0.9)]
+    pipeline = _face_pipeline(tmp_path)  # layout_set defaults to K-B
+    pipeline.scenes = [scene]
+
+    pipeline._step9_layout()
+
+    layout_dir = tmp_path / "out" / "layout"
+    index = layout_dir / "index.html"
+    assert index.exists()
+    html = index.read_text(encoding="utf-8")
+    assert "K-B" in html
+    assert "Other layout options" in html
+    assert (layout_dir / "panels" / "K-B" / "scene_0001.jpg").exists()
+
+
+def test_step8_detections_run_layout_when_enabled(tmp_path, monkeypatch):
+    frame = tmp_path / "frame.png"
+    cv2.imwrite(str(frame), np.zeros((90, 160, 3), np.uint8))
+    scene = Scene(index=1, start=0.0, end=1.0, fps=24.0)
+    scene.frame_path = frame
+    scene.frame_size = (160, 90)
+    pipeline = _face_pipeline(tmp_path, layout=True, detect_head=False, detect_person=False)
+    pipeline.scenes = [scene]
+    _patch_annotate(monkeypatch, [])
+
+    pipeline._step8_detections()
+
+    assert (tmp_path / "out" / "layout" / "index.html").exists()
+
+
+def test_step9_layout_without_seam_carving_still_pairs(tmp_path):
+    # Carving disabled -> shrink is unknown, so K3 must not collapse every pair.
+    pipeline = _face_pipeline(tmp_path, layout=True, seam_carve=False,
+                              detect_head=False, detect_person=False)
+    scenes = []
+    for index in range(1, 5):
+        frame = tmp_path / f"frame_{index}.png"
+        cv2.imwrite(str(frame), np.zeros((90, 160, 3), np.uint8))
+        scene = Scene(index=index, start=float(index), end=index + 1.0, fps=24.0)
+        scene.frame_path = frame
+        scene.frame_size = (160, 90)
+        scenes.append(scene)
+    pipeline.scenes = scenes
+
+    pipeline._step9_layout()
+
+    html = (tmp_path / "out" / "layout" / "index.html").read_text(encoding="utf-8")
+    # 4 scenes -> first is a K2 establishing row, then a pair, then the tail:
+    # 3 rows (instead of 4 singles when K3 wrongly fires).
+    assert html.count('class="cleanrow"') == 3
+    assert "<figcaption" not in html
+    assert "rulelist" not in html
+
+
+def test_panel_renderer_prefers_inpainted_panorama(tmp_path):
+    from anime2manga.layout import FrameMeta
+    from anime2manga.layout_report import PanelRenderer
+
+    frame = tmp_path / "pano.png"
+    filled = tmp_path / "pano_inpainted.jpg"
+    cv2.imwrite(str(frame), np.full((40, 80, 3), (255, 0, 0), np.uint8))  # blue
+    cv2.imwrite(str(filled), np.full((40, 80, 3), (0, 0, 255), np.uint8))  # red
+    meta = FrameMeta(
+        index=1,
+        source_size=(80, 40),
+        is_panorama=True,
+        frame_path=str(frame),
+        panorama_path=str(filled),
+    )
+    renderer = PanelRenderer(work_dir=tmp_path, working_width=80)
+    panel = renderer.frame(meta)
+    assert panel is not None
+    assert int(panel[..., 2].mean()) > int(panel[..., 0].mean())  # red channel wins
+
+
 def test_step8_head_and_person_can_be_disabled_individually(tmp_path, monkeypatch):
     frame = tmp_path / "frame.png"
     cv2.imwrite(str(frame), np.zeros((40, 40, 3), np.uint8))

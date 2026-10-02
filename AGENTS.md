@@ -22,8 +22,9 @@ just check       # ruff check + pyrefly + pytest  (what CI runs)
 just lint        # ruff check src tests
 just typecheck   # pyrefly check src tests
 just test        # pytest
-just run         # pipeline on the bundled input.mkv -> output/report.md
+just run         # pipeline on the bundled input.mkv -> output/report.md (+ output/layout/index.html)
 just retarget    # seam-carving experiment over output/frames -> output/retarget
+just layout      # panel-layout rule-set trials -> output/layout_trials/
 ```
 
 If `just` is unavailable, use `.venv/bin/python -m pytest`,
@@ -52,6 +53,14 @@ Runtime dependencies are deliberately small: `numpy`, `opencv-python`,
     overlap, head-in-body containment, lean) computed from the detection boxes.
   - `detection.py` — the shared single-class YOLOv8 engine (letterbox, multi-scale decode, NMS, coloured drawing) used by `faces`/`heads`/`persons`.
   - `cropping.py`, `text_layout.py`, `translation.py`, `motion_vectors.py` — stubs.
+  - `layout.py` — panel-layout (step 9, also a standalone experiment): the two-function
+    planner (`frames_per_row` for the count decision, `plan_two` for fitting
+    exactly two frames, `plan_solo`, `plan_rows`) plus the `CountPolicy` /
+    `PlacePolicy` rule registries. Pure and box-only.
+  - `layout_report.py` — renders a `PanelPlan` to an image (`PanelRenderer`) and
+    writes the 3x2 trial HTML plus the rules-free `<set>.clean.html` preview.
+  - `layout_compare.py` — compares rule sets by the MD5 hashes of the panels
+    they produced (`scripts/layout_compare.py`).
   - `seam_carving.py` — content-aware retargeting engine (step 8b / standalone); `_seamcarve.cpp` — its native C++ backend (built by `setup.py`, driven through `ctypes`); `retarget.py` — the retarget metrics.
   - `retarget_report.py` — rendering for the standalone experiment report.
   - `data/` — bundled anime face ONNX model.
@@ -80,8 +89,11 @@ Runtime dependencies are deliberately small: `numpy`, `opencv-python`,
 
 `Pipeline.run()`: metadata → subtitles → scene detection → panoramas + infill →
 timeline validation → frame selection → audio → detections. `_step8_detections`
-**detects faces, heads and persons, then seam-carves regular frames, then draws
-boxes**. Detection and drawing are **per-category** and independent:
+**detects faces, heads and persons, then seam-carves regular frames, then runs
+the panel-layout step (`_step9_layout`, off for programmatic use, on via the
+CLI), then draws boxes**. The layout step (`output/layout/index.html`) runs
+*before* drawing so it sees clean pixels; it is best-effort and never fails the
+run. It uses the `--layout-set` rule set (default `K-B`). Detection and drawing are **per-category** and independent:
 `detect_face` (default **off**, head detection usually covers the face),
 `detect_head` and `detect_person` (default on); `draw_face_boxes` (default
 off), `draw_head_boxes` and `draw_person_boxes` (default on) under the

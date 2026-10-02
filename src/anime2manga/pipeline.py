@@ -132,6 +132,16 @@ class PipelineConfig:
     seam_carve_jobs: int = 1
     #: JPEG quality for seam-carved frames.
     seam_carve_quality: int = 92
+    #: Generate a panel-layout preview (``output/layout/index.html``) after step 8.
+    #: Off for programmatic use; the CLI turns it on by default.
+    layout: bool = False
+    #: Which rule set to lay the page out with (see ``layout.SETS``).
+    layout_set: str = "K-B"
+    #: Downscale each frame to this width before cropping for the layout panels.
+    layout_working_width: int = 768
+    layout_page_width: int = 1000
+    layout_gutter: int = 8
+    layout_quality: int = 88
     keep_analysis: bool = False
     verbose: bool = True
 
@@ -719,6 +729,14 @@ class Pipeline:
 
         self._step8b_seam_carve()
 
+        # Layout must see clean pixels, so run it before boxes are drawn on the
+        # frames.  It is best-effort: a scene whose image is missing is skipped.
+        if cfg.layout:
+            try:
+                self._step9_layout()
+            except Exception as exc:  # pragma: no cover - defensive
+                self.debug(f"layout step skipped: {exc}")
+
         if cfg.draw_boxes:
             for scene in self.scenes:
                 if scene.frame_path is None:
@@ -855,6 +873,88 @@ class Pipeline:
                 f"({result['size'][0]}x{result['size'][1]})"
             )
         self.log(f"seam carved frames: {carved}")
+
+    def _step9_layout(self) -> None:
+        """Render the panel-layout preview for the chosen rule set.
+
+        Reads the chosen frames *before* bounding boxes are drawn, lays them out
+        with the configured rule set, crops/carves each panel and writes
+        ``output/layout/index.html`` (a rules-free, comic-style page stack) plus
+        the panel images.  The page also lists the other available sets so a
+        user can see the options.
+        """
+        from .layout import (
+            SET_DESCRIPTIONS,
+            SETS,
+            LayoutConfig,
+            meta_from_scene,
+            paginate,
+            plan_rows,
+            set_policies,
+        )
+        from .layout_report import PanelRenderer, render_layout_index_html
+
+        cfg = self.config
+        wanted = [s for s in self.scenes if s.frame_path is not None and s.frame_size is not None]
+        if not wanted:
+            return
+        frames = [meta_from_scene(scene) for scene in wanted]
+        count_policy, place_policy = set_policies(cfg.layout_set)
+        rows = plan_rows(frames, LayoutConfig(), count_policy, place_policy)
+        pages = paginate(rows, 3)
+
+        out_dir = self.output_dir / "layout"
+        slug = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in cfg.layout_set)
+        panels_dir = out_dir / "panels" / slug
+        # Drop panels from a previous run so a changed set cannot leave stale
+        # images next to the new ones.
+        if panels_dir.parent.exists():
+            import shutil
+
+            shutil.rmtree(panels_dir.parent, ignore_errors=True)
+        renderer = PanelRenderer(
+            frames_dir=None,
+            source=None,
+            work_dir=out_dir / "_frames",
+            working_width=cfg.layout_working_width,
+            jpeg_quality=cfg.layout_quality,
+        )
+        by_index = {frame.index: frame for frame in frames}
+        panel_info: dict[int, tuple[str, float]] = {}
+        for row in rows:
+            for plan in row.panels:
+                meta = by_index.get(plan.scene_index)
+                if meta is None:
+                    continue
+                path = panels_dir / f"scene_{plan.scene_index:04d}.jpg"
+                try:
+                    width, height = renderer.write_panel(meta, plan, path)
+                except Exception as exc:
+                    self.debug(f"layout: scene {plan.scene_index} skipped ({exc})")
+                    continue
+                panel_info[plan.scene_index] = (
+                    f"panels/{slug}/{path.name}",
+                    width / height if height else 1.0,
+                )
+
+        options = [(name, SET_DESCRIPTIONS.get(name, "")) for name in SETS]
+        html = render_layout_index_html(
+            cfg.layout_set,
+            SET_DESCRIPTIONS.get(cfg.layout_set, ""),
+            options,
+            pages,
+            panel_info,
+            page_width=cfg.layout_page_width,
+            gutter=cfg.layout_gutter,
+        )
+        out_dir.mkdir(parents=True, exist_ok=True)
+        # Drop stale single-layout-set files from a previous run so only the
+        # current index.html remains (the experiment uses layout_trials/).
+        for pattern in ("*.html", "*.json"):
+            for stale in out_dir.glob(pattern):
+                stale.unlink()
+        (out_dir / "index.html").write_text(html, encoding="utf-8")
+        self.log(f"layout: {len(panel_info)} panels ({cfg.layout_set}) -> {out_dir / 'index.html'}")
 
     def _step7_audio(self) -> None:
         """Measure each scene's left/right audio balance (see :mod:`anime2manga.audio`)."""

@@ -11,6 +11,7 @@ from . import __version__
 from .audio import AudioFocusConfig
 from .errors import Anime2MangaError
 from .inpaint import InpaintConfig, available_inpaint_methods
+from .layout import PIPELINE_DEFAULT_SET, SETS
 from .panorama import PanConfig
 from .pipeline import PipelineConfig, run_pipeline
 from .report import write_report, write_scene_json
@@ -341,6 +342,47 @@ def build_parser() -> argparse.ArgumentParser:
         help="Upper edge of the speech band used for the balance (default: 3400 Hz).",
     )
 
+    layout = parser.add_argument_group("panel layout")
+    layout.add_argument(
+        "--layout",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Generate a panel-layout preview at output/layout/index.html after "
+            "detection (default: on)."
+        ),
+    )
+    layout.add_argument(
+        "--layout-set",
+        choices=sorted(SETS),
+        default=PIPELINE_DEFAULT_SET,
+        help=f"Panel-layout rule set (default: {PIPELINE_DEFAULT_SET}).",
+    )
+    layout.add_argument(
+        "--layout-working-width",
+        type=int,
+        default=768,
+        help="Downscale frames to this width for the layout panels (default: 768).",
+    )
+    layout.add_argument(
+        "--layout-page-width",
+        type=int,
+        default=1000,
+        help="Layout preview page width in pixels (default: 1000).",
+    )
+    layout.add_argument(
+        "--layout-gutter",
+        type=int,
+        default=8,
+        help="White gutter between panels in the layout preview (default: 8).",
+    )
+    layout.add_argument(
+        "--layout-quality",
+        type=int,
+        default=88,
+        help="JPEG quality for the layout panel images (default: 88).",
+    )
+
     debug = parser.add_argument_group("debug")
     debug.add_argument(
         "--keep-analysis",
@@ -415,6 +457,12 @@ def config_from_args(args: argparse.Namespace) -> PipelineConfig:
         ),
         seam_carve_jobs=args.seam_carve_jobs,
         seam_carve_quality=args.seam_carve_quality,
+        layout=args.layout,
+        layout_set=args.layout_set,
+        layout_working_width=args.layout_working_width,
+        layout_page_width=args.layout_page_width,
+        layout_gutter=args.layout_gutter,
+        layout_quality=args.layout_quality,
         keep_analysis=args.keep_analysis,
         verbose=not args.quiet,
     )
