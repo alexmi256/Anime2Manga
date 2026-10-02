@@ -234,3 +234,21 @@ def test_seam_carve_override_and_disable():
     assert zero.seam_carve is False
     off = cli.config_from_args(parser.parse_args(["video.mkv", "--no-seam-carve"]))
     assert off.seam_carve is False
+
+
+def test_layout_defaults_and_overrides():
+    parser = cli.build_parser()
+    default = cli.config_from_args(parser.parse_args(["video.mkv"]))
+    assert default.layout is True
+    assert default.layout_set == "K-B"
+    assert default.layout_gutter == 8
+
+    assert cli.config_from_args(parser.parse_args(["video.mkv", "--no-layout"])).layout is False
+    assert (
+        cli.config_from_args(parser.parse_args(["video.mkv", "--layout-set", "K-G"])).layout_set
+        == "K-G"
+    )
+    assert (
+        cli.config_from_args(parser.parse_args(["video.mkv", "--layout-gutter", "14"])).layout_gutter
+        == 14
+    )

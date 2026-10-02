@@ -45,6 +45,10 @@ run:
 retarget frames_dir="output/frames" out="output/retarget" jobs="8":
     PYTHONPATH=src {{python}} scripts/retarget_frames.py {{frames_dir}} -o {{out}} -j {{jobs}}
 
+# Experiment: render panel-layout rule-set trials (3x2 pages) from a run's scenes.json.
+layout output_dir="output" trials="output/layout_trials" source="input.mkv":
+    PYTHONPATH=src {{python}} scripts/layout_trials.py {{output_dir}} -o {{trials}} --source {{source}}
+
 # Benchmark the compiled seam-carving backend against the pure-Python one.
 bench frames_dir="output/frames" frames="12":
     {{python}} experiments/seam_carve_native/benchmark.py {{frames_dir}} --frames {{frames}}
