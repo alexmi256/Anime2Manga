@@ -370,6 +370,9 @@ def _clean_css(page_width: int, gutter: int) -> str:
                 gap: __GUTTER__px; margin: 0; padding: 0; }
     .cleanrow + .cleanrow { margin-top: __GUTTER__px; }
     .cleanrow img { display: block; }
+    .cell { position: relative; line-height: 0; }
+    .cell > img { width: 100%; height: 100%; }
+    .cell > img.bubble { position: absolute; left: 0; top: 0; pointer-events: none; }
     """
     return css.replace("__PAGEW__", str(page_width)).replace("__GUTTER__", str(gutter))
 
@@ -380,9 +383,16 @@ def _clean_pages_html(
     page_width: int,
     gutter: int,
     stamp: str,
+    bubble_urls: dict[int, str] | None = None,
 ) -> str:
-    """The rules-free page bodies shared by the trial and pipeline previews."""
+    """The rules-free page bodies shared by the trial and pipeline previews.
+
+    ``bubble_urls`` maps a scene index to its transparent overlay PNG; when
+    present the overlay is absolutely positioned over the panel so the bubbles
+    sit on the artwork without being baked into it.
+    """
     query = f"?v={html.escape(stamp)}" if stamp else ""
+    bubbles = bubble_urls or {}
     full_row_aspect = LayoutConfig().row_width_units * UNIT_ASPECT
     # Two-panel full row: page width minus both margins minus the single gutter.
     base_height = (page_width - 3 * gutter) / full_row_aspect
@@ -390,18 +400,30 @@ def _clean_pages_html(
     for page in pages:
         rows_html: list[str] = []
         for row in page.rows:
-            panels = [panel_info[p.scene_index] for p in row.panels if p.scene_index in panel_info]
+            panels = [p.scene_index for p in row.panels if p.scene_index in panel_info]
             if not panels:
                 continue
-            total_aspect = sum(aspect for _url, aspect in panels)
+            total_aspect = sum(panel_info[i][1] for i in panels)
             available = page_width - 2 * gutter - (len(panels) - 1) * gutter
             target = base_height * max(1, row.row_span)
             height = target if total_aspect <= 0 else min(target, available / total_aspect)
-            images = "".join(
-                f'<img src="{html.escape(url)}{query}" style="height:{height:.1f}px;width:auto">'
-                for url, _aspect in panels
-            )
-            rows_html.append(f'<div class="cleanrow">{images}</div>')
+            cells = []
+            for scene_index in panels:
+                url, aspect = panel_info[scene_index]
+                width = max(1, round(height * aspect))
+                overlay = ""
+                bubble = bubbles.get(scene_index)
+                if bubble:
+                    overlay = (
+                        f'<img class="bubble" src="{html.escape(bubble)}{query}" '
+                        f'style="height:{height:.1f}px;width:{width}px">'
+                    )
+                cells.append(
+                    f'<div class="cell" style="height:{height:.1f}px;width:{width}px">'
+                    f'<img src="{html.escape(url)}{query}">'
+                    f"{overlay}</div>"
+                )
+            rows_html.append(f'<div class="cleanrow">{"".join(cells)}</div>')
         blocks.append(f'<div class="cleanpage">{"".join(rows_html)}</div>')
     return "".join(blocks)
 
@@ -414,6 +436,7 @@ def render_clean_set_html(
     page_width: int = 1000,
     gutter: int = 8,
     stamp: str = "",
+    bubble_urls: dict[int, str] | None = None,
 ) -> str:
     """A rules-free preview: pages of panels only, no captions or row labels.
 
@@ -425,7 +448,7 @@ def render_clean_set_html(
         "<!doctype html><html><head><meta charset='utf-8'>"
         f"<title>Layout preview {html.escape(set_name)}</title>"
         f"<style>{_clean_css(page_width, gutter)}</style></head><body>"
-        + _clean_pages_html(pages, panel_info, page_width, gutter, stamp)
+        + _clean_pages_html(pages, panel_info, page_width, gutter, stamp, bubble_urls)
         + "</body></html>"
     )
 
@@ -440,6 +463,7 @@ def render_layout_index_html(
     page_width: int = 1000,
     gutter: int = 8,
     stamp: str = "",
+    bubble_urls: dict[int, str] | None = None,
 ) -> str:
     """The pipeline's ``layout/index.html``: the clean pages plus set options.
 
@@ -465,7 +489,7 @@ def render_layout_index_html(
         "<title>Anime2Manga layout</title>"
         f"<style>{_clean_css(page_width, gutter)}</style></head><body>"
         + header
-        + _clean_pages_html(pages, panel_info, page_width, gutter, stamp)
+        + _clean_pages_html(pages, panel_info, page_width, gutter, stamp, bubble_urls)
         + "</body></html>"
     )
 

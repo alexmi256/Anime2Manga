@@ -138,6 +138,35 @@ def test_render_layout_index_html_lists_options():
     assert "figcaption" not in html
 
 
+def test_render_layout_index_html_stacks_bubble_overlay():
+    from anime2manga.layout_report import render_layout_index_html
+
+    rows = [Row((_crop_plan(1),), "one", "K_odd")]
+    info = {1: ("panels/k_a/scene_0001.jpg", 16 / 9)}
+    html = render_layout_index_html(
+        "K-B",
+        "Default set.",
+        [],
+        paginate(rows, 3),
+        info,
+        page_width=600,
+        bubble_urls={1: "panels/k_a/scene_0001.png"},
+    )
+    # The overlay PNG is stacked over the panel inside a positioned cell.
+    assert 'class="cell"' in html
+    assert 'class="bubble"' in html
+    assert "panels/k_a/scene_0001.png" in html
+
+
+def test_render_layout_index_html_without_bubbles_has_no_overlay():
+    from anime2manga.layout_report import render_layout_index_html
+
+    rows = [Row((_crop_plan(1),), "one", "K_odd")]
+    info = {1: ("panels/k_a/scene_0001.jpg", 16 / 9)}
+    html = render_layout_index_html("K-B", "Default.", [], paginate(rows, 3), info)
+    assert 'class="bubble"' not in html
+
+
 def test_evaluate_set_reports_counts():
     frame = _meta()
     rows = [

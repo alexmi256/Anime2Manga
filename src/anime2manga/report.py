@@ -11,7 +11,7 @@ import json
 from pathlib import Path
 
 from .composition import lean_label
-from .models import DetectionBox, FrameComposition, PipelineResult, Scene
+from .models import DetectionBox, FrameComposition, PipelineResult, Scene, TextPlacement
 
 
 def format_time(seconds: float) -> str:
@@ -175,6 +175,17 @@ def _render_scene(scene: Scene, base: Path) -> list[str]:
             lines.append(f"- {subtitle.text}")
     else:
         lines.append("- (no subtitles)")
+    placement = scene.text_placement
+    if placement is not None and placement.bubble_count:
+        lines.append("")
+        lines.append(
+            f"Speech bubbles: {placement.bubble_count} "
+            f"({placement.area_frac * 100:.0f}% of panel, {placement.side})"
+        )
+        if placement.source:
+            lines.append(f"Bubble overlay: {placement.source}")
+        for note in placement.notes:
+            lines.append(f"- note: {note}")
     lines.append("")
     return lines
 
@@ -212,6 +223,20 @@ def _composition_dict(composition: FrameComposition | None) -> dict | None:
         "heads_in_body": composition.heads_in_body,
         "body_leans": composition.body_leans.value if composition.body_leans else None,
         "head_leans": composition.head_leans.value if composition.head_leans else None,
+    }
+
+
+def _text_placement_dict(placement: TextPlacement | None) -> dict | None:
+    """Serialise a scene's speech-bubble lettering for ``scenes.json``."""
+    if placement is None:
+        return None
+    return {
+        "side": placement.side,
+        "bubble_count": placement.bubble_count,
+        "area_frac": placement.area_frac,
+        "source": placement.source,
+        "regions": [list(r) for r in placement.regions],
+        "notes": list(placement.notes),
     }
 
 
@@ -264,6 +289,7 @@ def scene_to_dict(scene: Scene) -> dict:
         "heads": _boxes(scene.heads),
         "persons": _boxes(scene.persons),
         "composition": _composition_dict(scene.composition),
+        "text_placement": _text_placement_dict(scene.text_placement),
         "subtitle_count": len(scene.subtitles),
         "subtitles": [
             {"start": round(s.start, 3), "end": round(s.end, 3), "text": s.text}

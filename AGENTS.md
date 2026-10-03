@@ -8,8 +8,8 @@ change architecture, commands, or conventions.
 `anime2manga` turns an anime video (usually `.mkv`) into a manga/storyboard
 **markdown** document. Subtitles are the backbone: each subtitle cue is attached
 to a scene, and each scene gets a representative frame (or a stitched panorama
-when the camera pans). Pipeline steps 1–8 are implemented; cropping (9) and text
-placement (10) are stubs.
+when the camera pans). Pipeline steps 1–8 are implemented; cropping (9) remains
+a stub and text placement (10) now renders speech bubbles (see below).
 
 ## Environment and commands
 
@@ -52,7 +52,7 @@ Runtime dependencies are deliberately small: `numpy`, `opencv-python`,
   - `composition.py` — per-frame subject composition metrics (body/head percent,
     overlap, head-in-body containment, lean) computed from the detection boxes.
   - `detection.py` — the shared single-class YOLOv8 engine (letterbox, multi-scale decode, NMS, coloured drawing) used by `faces`/`heads`/`persons`.
-  - `cropping.py`, `text_layout.py`, `translation.py`, `motion_vectors.py` — stubs.
+  - `cropping.py`, `translation.py`, `motion_vectors.py` — stubs.
   - `layout.py` — panel-layout (step 9, also a standalone experiment): the two-function
     planner (`frames_per_row` for the count decision, `plan_two` for fitting
     exactly two frames, `plan_solo`, `plan_rows`) plus the `CountPolicy` /
@@ -62,6 +62,7 @@ Runtime dependencies are deliberately small: `numpy`, `opencv-python`,
   - `layout_compare.py` — compares rule sets by the MD5 hashes of the panels
     they produced (`scripts/layout_compare.py`).
   - `seam_carving.py` — content-aware retargeting engine (step 8b / standalone); `_seamcarve.cpp` — its native C++ backend (built by `setup.py`, driven through `ctypes`); `retarget.py` — the retarget metrics.
+  - `speech_bubbles.py` — step 10 lettering: the pure `plan_bubbles` geometry planner, `build_svg` (SVG balloons + text) and `render_overlay_png`/`write_panel_overlay`/`flatten_panel` (cairosvg rasterisation). See `docs/speech_bubbles.md`.
   - `retarget_report.py` — rendering for the standalone experiment report.
   - `data/` — bundled anime face ONNX model.
 - `setup.py` — builds the optional native seam-carving extension (`src/anime2manga/_seamcarve.cpp`).
@@ -174,6 +175,44 @@ They appear in `report.md` (`## Subject Composition`) and `scenes.json`
   overlay by default (`strip_overlays=True`); the pipeline sets it `False`
   because its freshly extracted frames have no boxes. Keep this distinction.
 - Full parameter guide: `docs/retarget_metrics.md`.
+
+## Speech bubbles (step 10) — the important details
+
+- **Ordering contract**: bubbles are planned on the **finished** panel, *after*
+  crop/carve and once its layout position is known. The geometry lives in final
+  panel pixels (`map_boxes_to_panel` maps source boxes into that space), so no
+  crop can move text off a speaker. `_step9_layout` calls `_letter_panel` per
+  panel; never letter a source frame.
+- **Two layers**: `speech_bubbles.plan_bubbles` is pure (panel size + subtitle
+  texts + panel-space boxes + audio focus → `BubbleSpec`s); `build_svg` +
+  `render_overlay_png` (cairosvg) render it. Keep placement logic in the planner.
+- **Both `.svg` and `.png` are emitted per subtitled panel** (unless
+  `--flatten-bubbles`, which bakes the PNG into the panel JPEG and removes it).
+  `layout/index.html` stacks the transparent PNG over the panel via `.cell` /
+  `img.bubble`; panels stay clean.
+- **Measure text with cairo, not Pillow.** Pillow and cairo disagree on text
+  width, so wrapping/box-sizing uses `measure_line` (a cairo ink probe, cached)
+  and `build_svg` reuses the same `_line_height`. Do not swap in
+  `PIL.ImageFont.getlength` for the final size.
+- **Shapes**: every balloon is a **rounded rectangle** for now (`classify_shape`
+  returns `ROUNDED`; the enum + path builders are kept for a later per-line
+  experiment). **No tails** — they were removed as unreliable. Base font size is
+  `FONT_SIZE = 30` (was 44), before the per-bubble shrink loop.
+- **Budget**: one balloon ≤ `MAX_BUBBLE_AREA` (42%), all ≤ `TEXT_BUDGET` (50%);
+  the planner shrinks the font (floor 16pt) then drops.
+- **Source→panel mapping is fraction-based.** `map_boxes_to_panel` normalises
+  boxes by the source `frame_size`, shifts by the renderer's actual
+  `crop_frac`/`crop_x_frac` and rescales to the panel; it is carve-invariant and
+  takes no seam-carve term. Detection is on the full-res frame, the panel is
+  downscaled/carved/cropped, so mixing pixels was a bug.
+- `Scene.text_placement` (regions in panel pixels, overlay `source`, count,
+  area) is mirrored into `report.md` and `scenes.json`.
+- **Bubble-placement optimisation is the next feature** — it belongs in
+  `plan_bubbles`/`_place_bubble` and may use audio focus, head/person boxes and
+  composition leans. The SVG/raster layer should not need to change.
+- Runtime deps `svgwrite` (SVG tree) + `cairosvg` (raster) back this step; the
+  font can be overridden with `ANIME2MANGA_BUBBLE_FONT`. Full guide:
+  `docs/speech_bubbles.md`.
 
 ## Validation expectations
 

@@ -222,3 +222,60 @@ def test_scene_to_dict_includes_heads_and_persons(make_scene):
     assert payload["persons"] == [
         {"x": 5, "y": 6, "width": 7, "height": 8, "confidence": 0.6}
     ]
+
+
+def test_scene_to_dict_serialises_text_placement(make_scene):
+    from anime2manga.models import TextPlacement
+
+    scene = make_scene()
+    scene.subtitles = [SubtitleLine(index=1, start=0.0, end=1.0, text="Hi.")]
+    scene.text_placement = TextPlacement(
+        side="left",
+        regions=((10, 20, 30, 40),),
+        source="layout/panels/K-B/scene_0001.svg",
+        bubble_count=1,
+        area_frac=0.12,
+        notes=("capped",),
+    )
+    payload = scene_to_dict(scene)
+    assert payload["text_placement"] == {
+        "side": "left",
+        "bubble_count": 1,
+        "area_frac": 0.12,
+        "source": "layout/panels/K-B/scene_0001.svg",
+        "regions": [[10, 20, 30, 40]],
+        "notes": ["capped"],
+    }
+
+
+def test_text_placement_is_none_without_bubbles(make_scene):
+    scene = make_scene()
+    assert scene_to_dict(scene)["text_placement"] is None
+
+
+def test_report_shows_bubble_lettering(make_scene):
+    from anime2manga.models import TextPlacement
+
+    scene = make_scene()
+    scene.subtitles = [SubtitleLine(index=1, start=0.0, end=1.0, text="Hi.")]
+    scene.text_placement = TextPlacement(
+        side="right",
+        regions=((0, 0, 10, 10),),
+        source="layout/panels/K-B/scene_0001.svg",
+        bubble_count=1,
+        area_frac=0.2,
+    )
+    result = PipelineResult(
+        media=MediaInfo(
+            path=Path("input.mkv"), duration=1.0, fps=24.0, width=1920, height=1080,
+            subtitle_tracks=[], chapters=[],
+        ),
+        clip=ClipWindow(start=0.0, end=1.0, source="test"),
+        subtitle_track=SubtitleTrack(index=3, codec="ass", language="eng", title="English"),
+        subtitle_lines=[],
+        scenes=[scene],
+        output_dir=Path("out"),
+    )
+    markdown = build_markdown(result)
+    assert "Speech bubbles: 1" in markdown
+    assert "layout/panels/K-B/scene_0001.svg" in markdown

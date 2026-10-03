@@ -102,7 +102,7 @@ a video with no subtitles fails with a clear message.
 | 8a. Subject composition metrics (body/head percent, overlap, lean) | `composition.py` | implemented |
 | 8b. Seam-carve a copy of each regular frame (`--seam-carve`) | `seam_carving.py`, `retarget.py` | implemented |
 | 9. Face-aware cropping | `cropping.py` | stub |
-| 10. Text/bubble placement | `text_layout.py` | stub |
+| 10. Subtitle speech-bubble lettering | `speech_bubbles.py` | implemented |
 | — Subtitle translation | `translation.py` | stub |
 | — Motion-vector pan fast-path | `motion_vectors.py` | research stub |
 
@@ -406,6 +406,27 @@ Layout runs *before* bounding boxes are drawn, so the panels show clean pixels.
 The trial/experiment tooling that compares sets (captioned pages, metrics,
 `<set>.clean.html`, MD5 comparison) lives in `scripts/layout_trials.py` and
 `scripts/layout_compare.py`; see [docs/layout_rules.md](docs/layout_rules.md).
+
+## Speech bubbles (step 10)
+
+Each panel's subtitles are lettered as manga-style speech balloons (on by
+default with the layout; turn them off with `--no-speech-bubbles`).  Balloons
+are planned on the **finished** panel — after seam carving/cropping and once its
+place on the page is known — so the text always sits over the right pixels.
+
+A balloon is a white rounded rectangle with a black outline and centred text.
+Each subtitled panel gets **two overlay assets** beside it:
+
+* `<scene>.svg` — the vector balloons (live, selectable text),
+* `<scene>.png` — a transparent raster of the same overlay,
+
+and `layout/index.html` stacks the PNG over the panel, so the panel image stays
+clean.  Pass `--flatten-bubbles` to also bake the overlay into the panel JPEG.
+
+Bubble **placement** is intentionally naive for now (bubbles alternate down the
+panel and avoid landing on a face); scoring placement from audio direction and
+the face/head boxes is the next feature.  See
+[docs/speech_bubbles.md](docs/speech_bubbles.md).
 
 ## Development
 
