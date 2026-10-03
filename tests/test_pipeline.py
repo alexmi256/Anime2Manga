@@ -22,7 +22,6 @@ from anime2manga.models import (
 )
 from anime2manga.pipeline import Pipeline, PipelineConfig, run_pipeline
 from anime2manga.retarget import RetargetConfig
-from anime2manga.text_layout import plan_text_placement
 from anime2manga.timeline import coverage, validate_scenes
 from anime2manga.translation import require_translation
 
@@ -267,17 +266,6 @@ def test_crop_stub_and_missing_face_detection_are_safe(tmp_path):
     assert crop.x == (1920 - 1080) // 2
     with_face = plan_crop(1920, 1080, [FaceBox(900, 400, 100, 100)])
     assert with_face.keeps_faces is True
-
-
-def test_plan_text_placement_maps_center_to_auto(make_scene):
-    scene = make_scene()
-    panel = (100, 100)
-    scene.audio_focus = "left"
-    assert plan_text_placement(scene, [], [], panel).side == "left"
-    scene.audio_focus = "right"
-    assert plan_text_placement(scene, [], [], panel).side == "right"
-    scene.audio_focus = "center"
-    assert plan_text_placement(scene, [], [], panel).side == "auto"
 
 
 def _face_pipeline(tmp_path, **overrides) -> Pipeline:

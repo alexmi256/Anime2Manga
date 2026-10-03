@@ -382,6 +382,25 @@ def build_parser() -> argparse.ArgumentParser:
         default=88,
         help="JPEG quality for the layout panel images (default: 88).",
     )
+    layout.add_argument(
+        "--speech-bubbles",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Letter each panel with speech bubbles built from its subtitles "
+            "(default: on with --layout).  Bubbles are planned on the finished "
+            "panel and written as SVG/PNG overlays beside it."
+        ),
+    )
+    layout.add_argument(
+        "--flatten-bubbles",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Also bake the bubble overlay into the panel JPEG instead of only "
+            "emitting the separate overlay assets (default: off)."
+        ),
+    )
 
     debug = parser.add_argument_group("debug")
     debug.add_argument(
@@ -463,6 +482,8 @@ def config_from_args(args: argparse.Namespace) -> PipelineConfig:
         layout_page_width=args.layout_page_width,
         layout_gutter=args.layout_gutter,
         layout_quality=args.layout_quality,
+        speech_bubbles=args.speech_bubbles,
+        flatten_bubbles=args.flatten_bubbles,
         keep_analysis=args.keep_analysis,
         verbose=not args.quiet,
     )

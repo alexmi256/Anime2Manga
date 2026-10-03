@@ -49,6 +49,7 @@ from .models import (
     PipelineResult,
     Scene,
     SubtitleLine,
+    TextPlacement,
 )
 from .panorama import PanConfig, detect_pan, pan_continues, stitch
 from .persons import PersonDetectionConfig
@@ -142,6 +143,14 @@ class PipelineConfig:
     layout_page_width: int = 1000
     layout_gutter: int = 8
     layout_quality: int = 88
+    #: Letter the panels with subtitle speech bubbles (step 10).  Bubbles are
+    #: planned on the **finished** panel image, after crop/carve and once the
+    #: panel's place in the layout is known (see ``speech_bubbles``).  Off for
+    #: programmatic use; the CLI turns it on with the layout.
+    speech_bubbles: bool = False
+    #: Bake the bubble overlay into the panel JPEG as well as emitting the
+    #: separate ``.svg``/``.png`` overlay assets.
+    flatten_bubbles: bool = False
     keep_analysis: bool = False
     verbose: bool = True
 
@@ -920,7 +929,9 @@ class Pipeline:
             jpeg_quality=cfg.layout_quality,
         )
         by_index = {frame.index: frame for frame in frames}
+        scene_by_index = {scene.index: scene for scene in wanted}
         panel_info: dict[int, tuple[str, float]] = {}
+        bubbles_by_scene: dict[int, str] = {}
         for row in rows:
             for plan in row.panels:
                 meta = by_index.get(plan.scene_index)
@@ -936,6 +947,16 @@ class Pipeline:
                     f"panels/{slug}/{path.name}",
                     width / height if height else 1.0,
                 )
+                if cfg.speech_bubbles:
+                    # Lettering is best-effort like the panel write: a bad font or
+                    # a cairo/fontconfig failure must not abort the whole page.
+                    try:
+                        self._letter_panel(
+                            scene_by_index.get(plan.scene_index), plan, path, (width, height),
+                            panels_dir, bubbles_by_scene,
+                        )
+                    except Exception as exc:
+                        self.debug(f"layout: bubbles for scene {plan.scene_index} skipped ({exc})")
 
         options = [(name, SET_DESCRIPTIONS.get(name, "")) for name in SETS]
         html = render_layout_index_html(
@@ -946,6 +967,7 @@ class Pipeline:
             panel_info,
             page_width=cfg.layout_page_width,
             gutter=cfg.layout_gutter,
+            bubble_urls=bubbles_by_scene,
         )
         out_dir.mkdir(parents=True, exist_ok=True)
         # Drop stale single-layout-set files from a previous run so only the
@@ -955,6 +977,68 @@ class Pipeline:
                 stale.unlink()
         (out_dir / "index.html").write_text(html, encoding="utf-8")
         self.log(f"layout: {len(panel_info)} panels ({cfg.layout_set}) -> {out_dir / 'index.html'}")
+
+    def _letter_panel(
+        self,
+        scene: Scene | None,
+        plan,
+        panel_path: Path,
+        panel_size: tuple[int, int],
+        panels_dir: Path,
+        bubble_urls: dict[int, str],
+    ) -> None:
+        """Plan and render a panel's speech bubbles (step 10).
+
+        Runs **after** the panel image is finished and its size is known, which
+        is the whole point of the ordering: the bubble geometry is expressed in
+        final panel pixels, so neither seam carving nor cropping can move it.
+        """
+        from . import speech_bubbles
+
+        if scene is None or not scene.subtitles:
+            return
+        width, height = panel_size
+        source_size = scene.frame_size or (width, height)
+        # Subject boxes in panel coordinates, so a bubble can avoid a face.
+        boxes = speech_bubbles.map_boxes_to_panel(
+            [*scene.heads, *scene.persons, *scene.faces],
+            panel_size,
+            source_size,
+            plan.crop_frac,
+            plan.crop_x_frac,
+        )
+        layout = speech_bubbles.plan_bubbles(
+            (width, height),
+            [line.text for line in scene.subtitles],
+            boxes=boxes,
+            audio_focus=scene.audio_focus,
+        )
+        written = speech_bubbles.write_panel_overlay(layout, panels_dir, panel_path.stem)
+        if written is None:
+            return
+        svg_path, png_path = written
+        if self.config.flatten_bubbles:
+            # Bake the overlay into the panel; there is then no separate PNG to
+            # stack in the page (and the stale file must not be referenced).
+            speech_bubbles.flatten_panel(panel_path, layout)
+            png_path.unlink(missing_ok=True)
+        else:
+            bubble_urls[scene.index] = f"panels/{panels_dir.name}/{png_path.name}"
+        scene.text_placement = TextPlacement(
+            side=scene.audio_focus,
+            regions=tuple(
+                (round(s.box[0]), round(s.box[1]), round(s.box[2]), round(s.box[3]))
+                for s in layout.specs
+            ),
+            source=str(svg_path.relative_to(self.output_dir)),
+            bubble_count=len(layout.specs),
+            area_frac=round(layout.area_frac, 4),
+            notes=layout.notes,
+        )
+        self.debug(
+            f"scene {scene.index}: {len(layout.specs)} bubble(s), "
+            f"{layout.area_frac * 100:.0f}% of panel"
+        )
 
     def _step7_audio(self) -> None:
         """Measure each scene's left/right audio balance (see :mod:`anime2manga.audio`)."""

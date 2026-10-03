@@ -375,10 +375,20 @@ class CropOption:
 
 @dataclass(frozen=True)
 class TextPlacement:
-    """Where a scene's subtitles should sit.  Step 10 (not implemented)."""
+    """Where a scene's subtitles were lettered (step 10).
+
+    ``regions`` are the chosen balloon boxes in **final panel pixels** (so they
+    are only meaningful once the panel has been carved/cropped).  ``source`` is
+    the overlay SVG relative to the output directory; ``bubble_count`` and
+    ``area_frac`` are the diagnostics surfaced in the report.
+    """
 
     side: str = "auto"
     regions: tuple[tuple[int, int, int, int], ...] = ()
+    source: str | None = None
+    bubble_count: int = 0
+    area_frac: float = 0.0
+    notes: tuple[str, ...] = ()
 
 
 @dataclass

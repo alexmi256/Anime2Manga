@@ -15,6 +15,9 @@ dependencies = [
     "opencv-python>=4.9",
     # Biharmonic panorama inpainting (skimage.restoration.inpaint_biharmonic).
     "scikit-image>=0.24",
+    # Speech-bubble lettering (step 10): SVG generation and rasterisation.
+    "svgwrite>=1.4",
+    "cairosvg>=2.7",
 ]
 
 [project.optional-dependencies]
