@@ -141,6 +141,11 @@ a video with no subtitles fails with a clear message.
   1.0`, `0` disables) right after a panorama is folded into the panorama.  It
   usually shows the tail of the same shot, so on its own it would appear as a
   near-duplicate panel.
+* **Subtitle ownership** is by cue midpoint: each cue is attached to the single
+  scene whose time range contains its midpoint, falling back to the scene it
+  overlaps most when the midpoint falls in a gap between scenes.  A cue
+  displayed across a scene cut therefore appears in exactly one panel rather
+  than being duplicated in both neighbouring scenes, and no cue is dropped.
 * **Overloaded scenes** carrying more than `--max-subtitles-per-scene` cues are
   re-detected at a lower threshold (`--subdivide-factor`) to yield more panels.
 

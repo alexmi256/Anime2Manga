@@ -49,6 +49,42 @@ def test_filter_subtitles_drops_outside_and_excluded():
     assert kept[0].start == 101.0 and kept[1].start == 150.0
 
 
+def test_subdivide_overloaded_assigns_every_cue_once(tmp_path, make_media):
+    """Pipeline-level invariant: a straddling cue lands in exactly one scene.
+
+    ``_subdivide_overloaded`` shares ``assign_subtitles`` with ``run`` and
+    ``_step6_frames``, so this exercises the real wiring without frames/ffmpeg.
+    """
+    pipeline = _face_pipeline(tmp_path)
+    pipeline.media = make_media()
+    pipeline.scenes = [
+        Scene(index=1, start=0.0, end=1.0, fps=24.0),
+        Scene(index=2, start=1.0, end=2.0, fps=24.0),
+    ]
+    pipeline.subtitle_lines = [SubtitleLine(1, 0.8, 1.5, "straddler")]
+
+    pipeline._subdivide_overloaded()
+
+    owned = [line.text for scene in pipeline.scenes for line in scene.subtitles]
+    assert owned == ["straddler"]
+
+
+def test_subdivide_overloaded_covers_a_scene_gap(tmp_path, make_media):
+    """A cue whose midpoint falls in a scene gap is still assigned once."""
+    pipeline = _face_pipeline(tmp_path)
+    pipeline.media = make_media()
+    pipeline.scenes = [
+        Scene(index=1, start=0.0, end=8.0, fps=24.0),
+        Scene(index=2, start=8.2, end=20.0, fps=24.0),
+    ]
+    pipeline.subtitle_lines = [SubtitleLine(1, 7.9, 8.15, "in the gap")]
+
+    pipeline._subdivide_overloaded()
+
+    owned = [line.text for scene in pipeline.scenes for line in scene.subtitles]
+    assert owned == ["in the gap"]
+
+
 def test_isolate_pan_keeps_timeline_gapless(tmp_path):
     config = PipelineConfig(
         input_path=tmp_path / "input.mkv", output_dir=tmp_path / "out", verbose=False
