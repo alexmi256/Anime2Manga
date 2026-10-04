@@ -63,10 +63,10 @@ from .scene_detect import (
     validate_threshold,
 )
 from .subtitles import (
+    assign_subtitles,
     extract_subtitles,
     load_subtitles,
     select_subtitle_track,
-    subtitles_in_range,
 )
 from .timeline import reindex, validate_scenes
 
@@ -221,8 +221,7 @@ class Pipeline:
 
         assert self.media is not None and self.clip is not None
         reindex(self.scenes)
-        for scene in self.scenes:
-            scene.subtitles = subtitles_in_range(lines, scene.range)
+        assign_subtitles(self.scenes, lines)
 
         return PipelineResult(
             media=self.media,
@@ -615,10 +614,14 @@ class Pipeline:
     def _subdivide_overloaded(self) -> None:
         assert self.media is not None
         threshold = self._resolve_threshold() * self.config.subdivide_factor
+        # Assign ownership up front so an overloaded scene's cue count matches
+        # exactly what it will report (and a cue in a scene gap is still
+        # counted once).
+        assign_subtitles(self.scenes, self.subtitle_lines)
         rebuilt: list[Scene] = []
         split_count = 0
         for scene in self.scenes:
-            subs = subtitles_in_range(self.subtitle_lines, scene.range)
+            subs = scene.subtitles
             if (
                 scene.is_panoramic
                 or len(subs) <= self.config.max_subtitles_per_scene
@@ -654,8 +657,8 @@ class Pipeline:
             self.media, self.work_dir, analysis_width=self.config.analysis_width
         )
         frames_dir = self.output_dir / "frames"
+        assign_subtitles(self.scenes, self.subtitle_lines)
         for scene in self.scenes:
-            scene.subtitles = subtitles_in_range(self.subtitle_lines, scene.range)
             if scene.is_panoramic:
                 scene.frame_path = scene.panorama_path
                 scene.frame_time = scene.range.midpoint

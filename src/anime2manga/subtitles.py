@@ -25,9 +25,9 @@ from .ffmpeg_utils import run
 from .models import (
     BITMAP_SUBTITLE_CODECS,
     MediaInfo,
+    Scene,
     SubtitleLine,
     SubtitleTrack,
-    TimeRange,
 )
 
 #: Map common ISO 639-1 codes onto the 639-2 codes ffmpeg/Matroska usually use.
@@ -305,8 +305,49 @@ def load_subtitles(path: Path, track: SubtitleTrack) -> list[SubtitleLine]:
     return parse_srt(content, track_index=track.index, language=track.language)
 
 
-def subtitles_in_range(
-    lines: list[SubtitleLine], window: TimeRange
-) -> list[SubtitleLine]:
-    """Return cues that overlap ``window`` (strictly positive overlap)."""
-    return [line for line in lines if window.intersection(line.range) is not None]
+def _overlap_duration(scene: Scene, line: SubtitleLine) -> float:
+    """Seconds of ``line`` that fall inside ``scene`` (0 when they do not meet)."""
+    return max(0.0, min(scene.end, line.end) - max(scene.start, line.start))
+
+
+def _cue_owner(scenes: list[Scene], line: SubtitleLine) -> Scene | None:
+    """The single scene that should own ``line`` (``scenes`` sorted by start).
+
+    Midpoint containment is the primary rule: scenes normally tile the clip, so
+    the cue's midpoint lands in exactly one scene.  The pipeline can, however,
+    leave a small gap between scenes (``timeline.extend_scene_for_pan`` drops a
+    following scene whose remainder is at most ``MIN_SCENE_LEN`` without
+    extending the pan), so a midpoint can fall into no scene at all.  When that
+    happens the cue falls back to the scene it overlaps most, and finally to the
+    nearest scene; a cue is therefore never dropped.
+    """
+    if not scenes:
+        return None
+    midpoint = line.midpoint
+    for scene in scenes:
+        if scene.start <= midpoint < scene.end:
+            return scene
+    best = max(scenes, key=lambda scene: _overlap_duration(scene, line))
+    if _overlap_duration(best, line) > 0.0:
+        return best
+    return min(scenes, key=lambda scene: abs(scene.range.midpoint - midpoint))
+
+
+def assign_subtitles(scenes: list[Scene], lines: list[SubtitleLine]) -> None:
+    """Attach every cue to exactly one scene.
+
+    Ownership is by cue midpoint, which gives a cue displayed across a scene cut
+    a single owner instead of listing it in both neighbours (the bug that made
+    repeated lines appear in ``report.md``/``scenes.json`` and be lettered
+    twice).  A cue whose midpoint falls in a gap between scenes is still claimed
+    by its highest-overlap scene, so no line is silently dropped.  The midpoint
+    rule matches how :meth:`Pipeline._filter_subtitles` chooses cues within the
+    clip and how :func:`frames.target_time` places the representative frame.
+    """
+    ordered = sorted(scenes, key=lambda scene: scene.start)
+    for scene in ordered:
+        scene.subtitles = []
+    for line in lines:
+        owner = _cue_owner(ordered, line)
+        if owner is not None:
+            owner.subtitles.append(line)

@@ -107,6 +107,13 @@ Panoramic scenes are never seam-carved. Faces, heads and persons are drawn in
 distinct colours (green / blue / red) and are listed under
 `Face`/`Head`/`Person Bounding Boxes:` in the report.
 
+Each subtitle cue is attached to exactly one scene: `assign_subtitles` picks the
+owner by the cue's **midpoint**, falling back to the highest-overlap scene when
+the midpoint lands in a gap between scenes (the pan timeline can leave one).
+Do not switch back to plain overlap selection — a cue displayed across a cut
+would then be listed in both neighbouring scenes and lettered twice, and a
+midpoint-only rule would drop a cue sitting in a gap.
+
 Step 8 also derives `Scene.composition` (`composition.py`): body/head percent of
 frame (union of person/head boxes), body–head overlap percent, head-in-body
 containment, and a `left`/`middle`/`right` lean per category. These are
